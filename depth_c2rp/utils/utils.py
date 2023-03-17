@@ -14,6 +14,8 @@ import glob
 import cv2
 import matplotlib.pyplot as plt
 import json
+import torch.distributed as dist
+import random
 
 def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
     """
@@ -548,9 +550,18 @@ def compute_concat_loss(R, T, Angles, device):
     joints_x3d_cam= torch.bmm(R, joints_x3d_rob.permute(0, 2, 1).contiguous()) + T
     return joints_x3d_cam.permute(0,2,1).contiguous()
     
-    
-    
-    
+def set_random_seed(seed):
+    assert isinstance(
+        seed, int
+    ), 'Expected "seed" to be an integer, but it is "{}".'.format(type(seed))
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     
     
     

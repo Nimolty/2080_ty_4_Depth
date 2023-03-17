@@ -4,6 +4,7 @@ import yaml
 import time
 import multiprocessing as mp
 import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -26,17 +27,26 @@ from depth_c2rp.optimizers import get_optimizer, adapt_lr
 from depth_c2rp.build import build_model, DataParallel
 from depth_c2rp.losses import get_loss, Calculate_Loss
 from depth_c2rp.utils.utils import save_model, load_model, exists_or_mkdir, visualize_training_loss, find_seq_data_in_dir, visualize_training_masks, visualize_inference_results
-from depth_c2rp.utils.utils import check_input, visualize_validation_loss, load_camera_intrinsics, visualize_training_lr
+from depth_c2rp.utils.utils import check_input, visualize_validation_loss, load_camera_intrinsics, visualize_training_lr, set_random_seed
 from depth_c2rp.configs.config import update_config
 from depth_c2rp.datasets.datasets import Depth_dataset
 from inference import network_inference
 
+def reduce_tensor(losses, num_gpus):
+    losses_copy = {}
+    for key, value in losses.items():
+        rt = value.clone()
+        rt = dist.all_reduce(rt.div_(num_gpus))
+        losses_copy[key] = rt
+    return losses_copy
 
 def main(cfg):
     """
         This code is designed for the whole training. 
     """
     # expect cfg is a dict
+    set_random_seed(int(cfg["MODEL"]["SEED"]))
+    
     assert type(cfg) == dict
     device_ids = [4,5,6,7] 
     
@@ -61,8 +71,8 @@ def main(cfg):
     training_dataset = Depth_dataset(training_data, dataset_cfg["MANIPULATOR"], dataset_cfg["KEYPOINT_NAMES"], dataset_cfg["JOINT_NAMES"], \
     dataset_cfg["INPUT_RESOLUTION"], mask_dict=dataset_cfg["MASK_DICT"], camera_K = camera_K, is_res = dataset_cfg["IS_RES"], device=device,\
     num_classes = int(cfg["MODEL"]["MODEL_CLASSES"]))
-    training_loader = torch.utils.data.DataLoader(training_dataset, batch_size=train_cfg["BATCH_SIZE"], shuffle=True, \
-                                               num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=True)
+    #training_loader = torch.utils.data.DataLoader(training_dataset, batch_size=train_cfg["BATCH_SIZE"], shuffle=True, \
+    #                                           num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=True)
                                                
     train_sampler = DistributedSampler(training_dataset)
     training_loader = DataLoader(training_dataset, sampler=train_sampler, batch_size=train_cfg["BATCH_SIZE"],
@@ -73,8 +83,8 @@ def main(cfg):
     val_dataset = Depth_dataset(val_data, dataset_cfg["MANIPULATOR"], dataset_cfg["KEYPOINT_NAMES"], dataset_cfg["JOINT_NAMES"], \
     dataset_cfg["INPUT_RESOLUTION"], mask_dict=dataset_cfg["MASK_DICT"], camera_K = camera_K, is_res = dataset_cfg["IS_RES"], device=device,\
     num_classes = int(cfg["MODEL"]["MODEL_CLASSES"]))
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=train_cfg["BATCH_SIZE"], shuffle=True, \
-                                               num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=True)
+    #val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=train_cfg["BATCH_SIZE"], shuffle=True, \
+    #                                           num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=True)
     val_sampler = DistributedSampler(val_dataset)
     val_loader = DataLoader(val_dataset, sampler=val_sampler, batch_size=train_cfg["BATCH_SIZE"],
                                   num_workers=train_cfg["NUM_WORKERS"], pin_memory=True)
@@ -101,7 +111,8 @@ def main(cfg):
     exists_or_mkdir(save_path)
     exists_or_mkdir(checkpoint_path)
     exists_or_mkdir(tb_path)
-    writer = SummaryWriter(tb_path)
+    if dist.get_rank() == 0:
+        writer = SummaryWriter(tb_path)
     
     # Load Checkpoint / Resume Training
     start_epoch = 0
@@ -147,7 +158,7 @@ def main(cfg):
     if num_gpus > 1:
         print('use {} gpus!'.format(num_gpus))
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[cfg["LOCAL_RANK"]],
-                                                output_device=cfg["LOCAL_RANK"],find_unused_parameters=True)
+                                                output_device=cfg["LOCAL_RANK"],find_unused_parameters=False)
 #    model = MMDistributedDataParallel(model)
     
     max_iters = len(training_loader) * train_cfg["EPOCHS"]
@@ -189,16 +200,20 @@ def main(cfg):
             
             optimizer.zero_grad()
             losses["total_loss"].backward()
+            # print("losses", losses)
             optimizer.step()
-            
+            # losses_copy = reduce_tensor(losses, num_gpus)
+            # print("losses_copy", losses_copy)
             # loss_time = time.time()
             # print("Loss Time", loss_time - end_time) 
 #            if batch_idx == 0:
 #                check_input(batch, cfg)
-            visualize_training_loss(losses, writer, batch_idx, epoch, len(training_loader))
-            visualize_training_lr(lr_, writer, batch_idx, epoch, len(training_loader))
-            if batch_idx % 50 == 0:
-                visualize_training_masks(mask_out, writer, device, batch_idx, epoch, len(training_loader))
+            if dist.get_rank() == 0:
+                #losses_copy = reduce_tensor(losses)
+                visualize_training_loss(losses, writer, batch_idx, epoch, len(training_loader))
+                visualize_training_lr(lr_, writer, batch_idx, epoch, len(training_loader))
+                if batch_idx % 50 == 0:
+                    visualize_training_masks(mask_out, writer, device, batch_idx, epoch, len(training_loader))
         
             # final_time = time.time()
             # print("All Time", final_time - pre_process_time)
@@ -243,10 +258,11 @@ def main(cfg):
                     val_3d_loss.append(val_losses["joint_3d_loss"].item())
                     val_pos_loss.append(val_losses["joint_pos_loss"].item())
                     val_rt_loss.append(val_losses["rt_loss"].item())
-                visualize_validation_loss(val_loss, val_mask_loss, val_3d_loss, val_pos_loss, val_rt_loss, writer, epoch)
+                if dist.get_rank() == 0:
+                    visualize_validation_loss(val_loss, val_mask_loss, val_3d_loss, val_pos_loss, val_rt_loss, writer, epoch)
         
         # Inference
-        if epoch % 5 == 0: 
+        if epoch % 10 == 0 and dist.get_rank() == 0: 
             add_results, mAP_dict = network_inference(model, cfg, epoch, device)
             visualize_inference_results(add_results, mAP_dict, writer, epoch)
 
@@ -256,6 +272,7 @@ def main(cfg):
 
 
 if __name__ == "__main__":
+    torch.multiprocessing.set_start_method('spawn')
     cfg, args = update_config()
     main(cfg)
 #    find_seq_data_in_dir("/DATA/disk1/hyperplane/Depth_C2RP/Data/TY/")

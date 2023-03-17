@@ -8,6 +8,7 @@ MODEL:
   MODEL_CLASSES : 12                                                   # semantic labeling classes
   IN_CHANNELS   : [64, 128, 256, 512]                                 # [64, 128, 256, 512] for ResNet_18 ; [256, 512, 1024, 2048] for ResNet_50
   PRETRAINED    : "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/pretrained/resnet18_a1.pth"              # backbone model's weight 
+  SEED          : 317
 
 DATASET:
   NAME          : HELEN                                               # dataset name to be trained with (camvid, cityscapes, ade20k)
@@ -28,12 +29,12 @@ DATASET:
 
 TRAIN:
   IMAGE_SIZE    : [360, 640]      # training image size in (h, w)
-  BATCH_SIZE    : 32              # batch size used to train
+  BATCH_SIZE    : 20             # batch size used to train
   EPOCHS        : 500             # number of epochs to train
   EVAL_INTERVAL : 10              # evaluation interval during training
   AMP           : false           # use AMP in training
   DDP           : false           # use DDP training
-  NUM_WORKERS   : 0
+  NUM_WORKERS   : 2
 
 
 
