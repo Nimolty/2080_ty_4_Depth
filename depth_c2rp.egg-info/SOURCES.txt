@@ -1,0 +1,7 @@
+setup.py
+depth_c2rp/__init__.py
+depth_c2rp.egg-info/PKG-INFO
+depth_c2rp.egg-info/SOURCES.txt
+depth_c2rp.egg-info/dependency_links.txt
+depth_c2rp.egg-info/requires.txt
+depth_c2rp.egg-info/top_level.txt
