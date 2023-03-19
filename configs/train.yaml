@@ -12,11 +12,12 @@ MODEL:
 
 DATASET:
   NAME          : HELEN                                               # dataset name to be trained with (camvid, cityscapes, ade20k)
-  TRAINING_ROOT : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201/"
-  VAL_ROOT      : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Val/"  # dataset root path
-  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn/"
+  TRAINING_ROOT : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201/"     
+  VAL_ROOT      : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Val/"   # dataset root path
+  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn/" 
   #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Small_Testing_Data_0115/"  
-  #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Test_Data_0115/"               
+  #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Test_Data_0115/"  
+  #TESTING ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
   IGNORE_LABEL  : 255
   MANIPULATOR   : Franka_Emika_Panda
   KEYPOINT_NAMES : ["Link0", "Link1", "Link2", "Link3", "Link4", "Link5", "Link6", "Link7", "panda_hand", "panda_finger_joint1", "panda_finger_joint2"]
@@ -46,7 +47,7 @@ LOSS:
 
 OPTIMIZER:
   NAME          : adamw           # optimizer name
-  LR            : 0.001           # initial learning rate used in optimizer
+  LR            : 0.0001           # initial learning rate used in optimizer
   WEIGHT_DECAY  : 0.01            # decay rate used in optimizer 
 
 SCHEDULER:

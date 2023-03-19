@@ -4,7 +4,7 @@ import yaml
 import time
 import multiprocessing as mp
 import os
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+#os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -27,18 +27,18 @@ from depth_c2rp.optimizers import get_optimizer, adapt_lr
 from depth_c2rp.build import build_model, DataParallel
 from depth_c2rp.losses import get_loss, Calculate_Loss
 from depth_c2rp.utils.utils import save_model, load_model, exists_or_mkdir, visualize_training_loss, find_seq_data_in_dir, visualize_training_masks, visualize_inference_results
-from depth_c2rp.utils.utils import check_input, visualize_validation_loss, load_camera_intrinsics, visualize_training_lr, set_random_seed
+from depth_c2rp.utils.utils import check_input, visualize_validation_loss, load_camera_intrinsics, visualize_training_lr, set_random_seed, reduce_mean
 from depth_c2rp.configs.config import update_config
 from depth_c2rp.datasets.datasets import Depth_dataset
 from inference import network_inference
 
-def reduce_tensor(losses, num_gpus):
-    losses_copy = {}
-    for key, value in losses.items():
-        rt = value.clone()
-        rt = dist.all_reduce(rt.div_(num_gpus))
-        losses_copy[key] = rt
-    return losses_copy
+#def reduce_tensor(losses, num_gpus):
+#    losses_copy = {}
+#    for key, value in losses.items():
+#        rt = value.clone()
+#        rt = dist.all_reduce(rt.div_(num_gpus))
+#        losses_copy[key] = rt
+#    return losses_copy
 
 def main(cfg):
     """
@@ -171,8 +171,8 @@ def main(cfg):
 #            print(i)
         for batch_idx, batch in enumerate(tqdm(training_loader)):
 #            print('1')
-            torch.cuda.empty_cache()
             pre_process_time = time.time()
+            #print("1:{}".format(torch.cuda.memory_allocated(0)))
             lr_ = adapt_lr(optimizer, epoch, batch_idx, len(training_loader), optim_cfg["LR"], max_iters)
             start_time = time.time()
 
@@ -186,6 +186,7 @@ def main(cfg):
             batch_gt_masks, batch_gt_joints_pos, batch_gt_joints_wrt_cam, batch_gt_joints_wrt_rob = batch["next_frame_mask_as_input"].to(device), \
             batch["next_frame_joints_pos"].to(device), batch["next_frame_joints_wrt_cam"].to(device), batch["next_frame_joints_wrt_rob"].to(device)
             middle_time = time.time()
+            #print("2:{}".format(torch.cuda.memory_allocated(0)))
             mask_out, trans_out, quat_out, joint_pos = model(next_input)
             #mask_out, trans_out, quat_out, joint_3d, joint_pos = model.train_step(next_input)
             end_time = time.time()
@@ -197,7 +198,7 @@ def main(cfg):
             losses = loss_fn(trans_out, quat_out, joint_pos,mask_out, \
                 batch_gt_masks, batch_gt_joints_pos, batch_gt_joints_wrt_cam, batch_gt_joints_wrt_rob,\
                  batch_xyz_rp=batch_xyz_rp)
-            
+            #print("3:{}".format(torch.cuda.memory_allocated(0)))
             optimizer.zero_grad()
             losses["total_loss"].backward()
             # print("losses", losses)
@@ -208,13 +209,16 @@ def main(cfg):
             # print("Loss Time", loss_time - end_time) 
 #            if batch_idx == 0:
 #                check_input(batch, cfg)
+            torch.distributed.barrier()
+            losses_copy = reduce_mean(losses, num_gpus)
             if dist.get_rank() == 0:
                 #losses_copy = reduce_tensor(losses)
-                visualize_training_loss(losses, writer, batch_idx, epoch, len(training_loader))
+                visualize_training_loss(losses_copy, writer, batch_idx, epoch, len(training_loader))
                 visualize_training_lr(lr_, writer, batch_idx, epoch, len(training_loader))
                 if batch_idx % 50 == 0:
                     visualize_training_masks(mask_out, writer, device, batch_idx, epoch, len(training_loader))
-        
+            #print("4:{}".format(torch.cuda.memory_allocated(0)))
+            #torch.cuda.empty_cache()
             # final_time = time.time()
             # print("All Time", final_time - pre_process_time)
         
@@ -253,16 +257,19 @@ def main(cfg):
                     val_losses = loss_fn(val_trans_out, val_quat_out, val_joint_pos,val_mask_out, \
                         val_batch_gt_masks, val_batch_gt_joints_pos, val_batch_gt_joints_wrt_cam, val_batch_gt_joints_wrt_rob, batch_xyz_rp=val_batch_xyz_rp)
                     
-                    val_loss.append(val_losses["total_loss"].item())
-                    val_mask_loss.append(val_losses["mask_loss"].item())
-                    val_3d_loss.append(val_losses["joint_3d_loss"].item())
-                    val_pos_loss.append(val_losses["joint_pos_loss"].item())
-                    val_rt_loss.append(val_losses["rt_loss"].item())
+                    #print(type(val_losses["total_loss"].item()))
+                    val_loss.append(val_losses["total_loss"].detach().item())
+                    val_mask_loss.append(val_losses["mask_loss"].detach().item())
+                    val_3d_loss.append(val_losses["joint_3d_loss"].detach().item())
+                    val_pos_loss.append(val_losses["joint_pos_loss"].detach().item())
+                    val_rt_loss.append(val_losses["rt_loss"].detach().item())
                 if dist.get_rank() == 0:
                     visualize_validation_loss(val_loss, val_mask_loss, val_3d_loss, val_pos_loss, val_rt_loss, writer, epoch)
+                #del val_loss, val_mask_loss, val_3d_loss, val_pos_loss, val_rt_loss
+                #torch.cuda.empty_cache()
         
         # Inference
-        if epoch % 10 == 0 and dist.get_rank() == 0: 
+        if epoch % 5 == 0 and dist.get_rank() == 0: 
             add_results, mAP_dict = network_inference(model, cfg, epoch, device)
             visualize_inference_results(add_results, mAP_dict, writer, epoch)
 

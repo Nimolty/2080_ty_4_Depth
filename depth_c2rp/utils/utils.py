@@ -110,16 +110,16 @@ def exists_or_mkdir(path):
 def visualize_training_loss(losses, writer, batch_idx, epoch, data_loader_length):
     # expect losses are dict(), and values are tensor
     for key, value in losses.items():
-        this_loss = value.item()
+        this_loss = value.detach().item()
         writer.add_scalar(f"Loss/{key}_loss", this_loss, batch_idx + (epoch-1) * data_loader_length)
 
 
 def visualize_validation_loss(val_loss, val_mask_loss, val_3d_loss, val_pos_loss, val_rt_loss, writer, epoch):
-    writer.add_scalar(f"Val/Total_Loss", np.mean(val_loss), epoch-1)
-    writer.add_scalar(f"Val/Mask_Loss", np.mean(val_mask_loss), epoch-1)
-    writer.add_scalar(f"Val/3D_Loss", np.mean(val_3d_loss), epoch-1)
-    writer.add_scalar(f"Val/Pos_Loss", np.mean(val_pos_loss), epoch-1)
-    writer.add_scalar(f"Val/Rt_Loss", np.mean(val_rt_loss), epoch-1)
+    writer.add_scalar(f"Val/Total_Loss", np.mean(val_loss), epoch)
+    writer.add_scalar(f"Val/Mask_Loss", np.mean(val_mask_loss), epoch)
+    writer.add_scalar(f"Val/3D_Loss", np.mean(val_3d_loss), epoch)
+    writer.add_scalar(f"Val/Pos_Loss", np.mean(val_pos_loss), epoch)
+    writer.add_scalar(f"Val/Rt_Loss", np.mean(val_rt_loss), epoch)
 
 def visualize_training_masks(masks, writer, device, batch_idx, epoch, data_loader_length):
     # masks为BxCxHxW 这里的C为model_classes
@@ -137,7 +137,7 @@ def visualize_training_masks(masks, writer, device, batch_idx, epoch, data_loade
     res = res[:, None, :, :]
     #print(torch.where(res != 0)[0].shape)
     #print("res.shape", res.shape)
-    grid_image = make_grid(res * 255, B//4, normalize=False, scale_each=False)
+    grid_image = make_grid(res * 255, B//2, normalize=False, scale_each=False)
     #print("grid_image", grid_image.shape)
     writer.add_image(f'dt_masks', grid_image.detach().cpu().numpy(), batch_idx + (epoch-1) * data_loader_length, dataformats='CHW')
 
@@ -563,7 +563,14 @@ def set_random_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     
-    
+def reduce_mean(losses, num_gpus):
+    losses_copy = {}
+    for key, value in losses.items():
+        rt = value.clone()
+        dist.all_reduce(rt, op=dist.reduce_op.SUM)
+        rt /= num_gpus
+        losses_copy[key] = rt
+    return losses_copy
     
     
     
