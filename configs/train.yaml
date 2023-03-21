@@ -14,7 +14,7 @@ DATASET:
   NAME          : HELEN                                               # dataset name to be trained with (camvid, cityscapes, ade20k)
   TRAINING_ROOT : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201/"     
   VAL_ROOT      : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Val/"   # dataset root path
-  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn/" 
+  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn/"             
   #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Small_Testing_Data_0115/"  
   #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Test_Data_0115/"  
   #TESTING ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
@@ -37,7 +37,15 @@ TRAIN:
   DDP           : false           # use DDP training
   NUM_WORKERS   : 2
 
-
+DR:
+  ENGINE          : Kaolin
+  CAD_MODEL_PATHS : [../materials/franka_panda/Link0.obj, ../materials/franka_panda/Link1.obj, ../materials/franka_panda/Link2.obj,
+                     ../materials/franka_panda/Link3.obj, ../materials/franka_panda/Link4.obj, ../materials/franka_panda/Link5.obj,
+                     ../materials/franka_panda/Link6.obj, ../materials/franka_panda/Link7.obj, ../materials/franka_panda/panda_hand.obj,
+                     ../materials/franka_panda/panda_finger_joint1.obj, ../materials/franka_panda/panda_finger_joint2.obj
+                    ] 
+  RT_LR           : 0.01
+  GA_LR           : 0.01
 
 LOSS:
   NAME          : CrossEntropy          # loss function name (OhemCrossEntropy, CrossEntropy, Dice)
@@ -63,7 +71,8 @@ EVAL:
   MSF: 
     ENABLE      : false                               # multi-scale and flip evaluation  
     FLIP        : true                                # use flip in evaluation  
-    SCALES      : [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]   # scales used in MSF evaluation                
+    SCALES      : [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]   # scales used in MSF evaluation         
+  BATCH_SIZE    : 12     
 
 
 TEST:

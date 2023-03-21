@@ -93,7 +93,8 @@ def main(cfg):
     model_cfg = cfg["MODEL"]
     model = build_model(model_cfg["BACKBONE"], model_cfg["HEAD"], model_cfg["MODEL_CLASSES"], model_cfg["IN_CHANNELS"], \
                         dataset_cfg["NUM_JOINTS"], dataset_cfg["OUTPUT_RESOLUTION"][0], dataset_cfg["OUTPUT_RESOLUTION"][1])
-    model.init_pretrained(model_cfg["PRETRAINED"])
+    if not cfg["RESUME"]:
+        model.init_pretrained(model_cfg["PRETRAINED"])
     
     # Build Loss Function
     loss_cfg = cfg["LOSS"]
@@ -102,7 +103,7 @@ def main(cfg):
     
     # Build Optimizer
     optim_cfg = cfg["OPTIMIZER"]
-    optimizer = get_optimizer(model, optim_cfg["NAME"], optim_cfg["LR"], optim_cfg["WEIGHT_DECAY"])
+    #optimizer = get_optimizer(model, optim_cfg["NAME"], optim_cfg["LR"], optim_cfg["WEIGHT_DECAY"])
     
     # Build Recording and Saving Path
     save_path = os.path.join(cfg["SAVE_DIR"], str(cfg["EXP_ID"]))
@@ -116,42 +117,21 @@ def main(cfg):
     
     # Load Checkpoint / Resume Training
     start_epoch = 0
-    if cfg["RESUME"] and dist.get_rank() == 0:
+    if cfg["RESUME"]:
         print("Resume Model Checkpoint")
         checkpoint_paths = os.listdir(checkpoint_path)
         checkpoint_paths.sort() 
         this_ckpt_path = os.path.join(checkpoint_path, "model.pth")
         print('this_ckpt_path', this_ckpt_path)
-        model, optimizer, start_epoch = load_model(model, this_ckpt_path, optim_cfg["LR"], optimizer)
+        model, start_epoch = load_model(model, this_ckpt_path, optim_cfg["LR"]) 
         print("successfully loaded!")
         
-    
-    # Training  	
-    
-#    gpus = [0,1,2,3]
-#    master_batch_size = train_cfg["BATCH_SIZE"] // len(gpus)
-#    rest_batch_size = (train_cfg["BATCH_SIZE"] - master_batch_size)
-#    chunk_sizes = [master_batch_size]
-#    for i in range(len(gpus) - 1):
-#      slave_chunk_size = rest_batch_size // (len(gpus) - 1)
-#      if i < rest_batch_size % (len(gpus) - 1):
-#        slave_chunk_size += 1
-#      chunk_sizes.append(slave_chunk_size)
-#    print('training chunk_sizes:',chunk_sizes)
-    
-#    model = model.cuda()
-#    model = DataParallel(
-#                model, device_ids=gpus, chunk_sizes=chunk_sizes
-#                ).to(device)
-#    for state in optimizer.state.values():
-#      for k, v in state.items():
-#        if isinstance(v, torch.Tensor):
-#          state[k] = v.to(device=device, non_blocking=True)
-          
-    
-#    print(model.device)
-#    model = torch.nn.DataParallel(model)
-#    model = model.to(device)    
+#        model = model.to(device)
+#        num_gpus = torch.cuda.device_count()
+#        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[cfg["LOCAL_RANK"]],
+#                                                output_device=cfg["LOCAL_RANK"],find_unused_parameters=False)
+        
+      
     model = model.to(device)
     num_gpus = torch.cuda.device_count()
     print("device", device)
@@ -159,6 +139,8 @@ def main(cfg):
         print('use {} gpus!'.format(num_gpus))
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[cfg["LOCAL_RANK"]],
                                                 output_device=cfg["LOCAL_RANK"],find_unused_parameters=False)
+    
+    optimizer = get_optimizer(model, optim_cfg["NAME"], optim_cfg["LR"], optim_cfg["WEIGHT_DECAY"]) 
 #    model = MMDistributedDataParallel(model)
     
     max_iters = len(training_loader) * train_cfg["EPOCHS"]
@@ -214,6 +196,7 @@ def main(cfg):
             if dist.get_rank() == 0:
                 #losses_copy = reduce_tensor(losses)
                 visualize_training_loss(losses_copy, writer, batch_idx, epoch, len(training_loader))
+                #visualize_training_loss(losses, writer, batch_idx, epoch, len(training_loader))
                 visualize_training_lr(lr_, writer, batch_idx, epoch, len(training_loader))
                 if batch_idx % 50 == 0:
                     visualize_training_masks(mask_out, writer, device, batch_idx, epoch, len(training_loader))
@@ -236,6 +219,7 @@ def main(cfg):
         # Validation
         if epoch % 5 == 0:
             with torch.no_grad():
+                model.eval()
                 val_loss, val_mask_loss, val_3d_loss, val_pos_loss, val_rt_loss = [], [], [], [], []
                 for val_idx, val_batch in enumerate(tqdm(val_loader)):
                     val_next_img = val_batch["next_frame_img_as_input"].to(device)

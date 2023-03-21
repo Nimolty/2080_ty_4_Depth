@@ -10,6 +10,7 @@ import open3d as o3d
 from tqdm import tqdm
 import torch.nn.functional as F
 import torch
+import torchvision.transforms as transforms
 import time
 # import OpenEXR
 
@@ -92,6 +93,17 @@ def DepthToPointCloud(depthImage, f):
     pointCloud[:, :, 2] = depthImage_copy
     
     return pointCloud
+
+def get_whole_simdepth(simdepth_path, threshold_dist=[0.01,7.00], threshold_vs=[-0.1, 7.00]):
+    simdepth_file = cv2.imread(simdepth_path, cv2.IMREAD_UNCHANGED)
+    img_ori_h, img_ori_w, _ = simdepth_file.shape
+    th_lw, th_up = threshold_dist
+    th_lwv, th_upv = threshold_vs
+    simdepth = simdepth_file[:, :, 0][:, :, None]
+    simdepth[np.where(simdepth <= th_lw)] = th_lwv
+    simdepth[np.where(simdepth >= th_up)] = th_upv
+    return simdepth
+    
 
 def res_crop_and_resize_simdepth(simdepth_path, input_resolution, uv=False, xy=False, nrm=False, device="cpu", \
                               camera_K=None, f=502.30,threshold_dist=[0.01, 7.00], threshold_vs=[-0.1, 7.00]):
@@ -381,6 +393,26 @@ def random_crop(img_size, expect_size):
     y1 = random.randint(0, margin_h+1)
     x1 = random.randint(0, margin_w+1)
     return y1, x1
+
+def batch_resize_masks_inference(batch_dt_mask, img_size):
+    # masks为BxCxHxW 这里的C为model_classes
+    device = batch_dt_mask.device
+    B, C, H, W = batch_dt_mask.shape
+    batch_dt_mask = torch.nn.functional.softmax(batch_dt_mask, dim=1)
+    batch_dt_mask_argmax = batch_dt_mask.argmax(dim=1,keepdims=True) # B x 1 x H x W
+    
+    img_h, img_w = img_size
+    res = torch.zeros(B, 1, img_h, img_w).to(device)
+    min_size = min(img_w, img_h)
+    assert img_w >= img_h # width >= height
+    padding_size = (img_w - min_size) // 2
+    transform = transforms.Compose([transforms.Resize(size=(min_size, min_size),interpolation=transforms.InterpolationMode.NEAREST
+                                                  )])
+    batch_dt_mask_argmax = transform(batch_dt_mask_argmax)
+    res[:, :, :, padding_size : img_w - padding_size] = batch_dt_mask_argmax
+    return res.permute(0,2,3,1).repeat(1,1,1,3)
+    
+
 
 if __name__ == "__main__":
     image_path = "/DATA/disk1/hyperplane/Depth_C2RP/Data/TY/03206/0029_color.png"

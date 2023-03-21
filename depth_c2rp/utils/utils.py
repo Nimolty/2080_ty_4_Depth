@@ -43,9 +43,11 @@ def save_model(path, epoch, model, optimizer=None):
 def load_model(model, model_path, lr, optimizer=None,resume=True):
   start_epoch = 0
   checkpoint = torch.load(model_path, map_location=lambda storage, loc: storage)
+  #checkpoint = torch.load(model_path, map_location="cpu")
   print('loaded {}, epoch {}'.format(model_path, checkpoint['epoch']))
   state_dict_ = checkpoint['state_dict']
   state_dict = {}
+  start_epoch = checkpoint['epoch']
    
   # convert data_parallal to model
   for k in state_dict_:
@@ -80,7 +82,7 @@ def load_model(model, model_path, lr, optimizer=None,resume=True):
     if not (k in state_dict):
       print('No param {}.'.format(k))
       state_dict[k] = model_state_dict[k]
-  model.load_state_dict(state_dict, strict=False)
+  model.load_state_dict(state_dict, strict=True)
 
   # resume optimizer parameters
   if optimizer is not None and resume:
@@ -96,7 +98,7 @@ def load_model(model, model_path, lr, optimizer=None,resume=True):
   if optimizer is not None:
     return model, optimizer, start_epoch
   else:
-    return model
+    return model, start_epoch
 
 
 def exists_or_mkdir(path):
@@ -137,9 +139,10 @@ def visualize_training_masks(masks, writer, device, batch_idx, epoch, data_loade
     res = res[:, None, :, :]
     #print(torch.where(res != 0)[0].shape)
     #print("res.shape", res.shape)
-    grid_image = make_grid(res * 255, B//2, normalize=False, scale_each=False)
+    grid_image = make_grid(res * 255, B//4, normalize=False, scale_each=False)  
     #print("grid_image", grid_image.shape)
-    writer.add_image(f'dt_masks', grid_image.detach().cpu().numpy(), batch_idx + (epoch-1) * data_loader_length, dataformats='CHW')
+    writer.add_image(f'dt_masks', grid_image.detach().cpu().numpy().transpose(1,2,0), batch_idx + (epoch-1) * data_loader_length, dataformats='HWC')
+    #cv2.imwrite(f"./check_masks/grid_{str(batch_idx).zfill(5)}_image.png", grid_image.detach().cpu().numpy().transpose(1,2,0))
 
 def visualize_training_lr(lr, writer, batch_idx, epoch, data_loader_length):
     writer.add_scalar(f"LR/Learning_Rate", lr, batch_idx + (epoch-1) * data_loader_length)

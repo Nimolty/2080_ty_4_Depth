@@ -7,7 +7,7 @@ from PIL import Image as PILImage
 import torch
 from torch.utils.data import Dataset as TorchDataset
 import torchvision.transforms as TVTransforms
-from depth_c2rp.utils.image_proc import crop_and_resize_img, crop_and_resize_mask, crop_and_resize_simdepth, normalize_image, res_crop_and_resize_simdepth
+from depth_c2rp.utils.image_proc import crop_and_resize_img, crop_and_resize_mask, crop_and_resize_simdepth, normalize_image, res_crop_and_resize_simdepth, get_whole_simdepth
 from depth_c2rp.utils.utils import load_keypoints_and_joints, matrix_to_quaternion, quaternionToRotation
 
 class Depth_dataset(TorchDataset):
@@ -148,6 +148,8 @@ class Depth_dataset(TorchDataset):
         #prev_joints_wrt_rob_np = (prev_base_rot_np.T @ ((prev_joints_wrt_cam_np - prev_base_trans_np[None, :]).T)).T
         next_joints_wrt_rob_np = (next_base_rot_np.T @ ((next_joints_wrt_cam_np - next_base_trans_np[None, :]).T)).T
         
+        next_whole_simdepth_np = get_whole_simdepth(next_frame_simdepth_path)
+        
         # Convert data to tensors -use float32 size 
         #prev_image_as_input_tensor = torch.from_numpy(prev_image_np).float()
         next_image_as_input_tensor = torch.from_numpy(next_image_np).float()
@@ -155,6 +157,7 @@ class Depth_dataset(TorchDataset):
         next_mask_as_input_tensor = torch.from_numpy(next_mask_np).long()
         #prev_simdepth_as_input_tensor = torch.from_numpy(prev_simdepth_np).float()
         next_simdepth_as_input_tensor = torch.from_numpy(next_simdepth_np).float()
+        next_whole_simdepth_as_input_tensor = torch.from_numpy(next_whole_simdepth_np).float()
         #prev_base_quaternion_tensor = torch.from_numpy(prev_base_quaternion_np).float()
         next_base_quaternion_tensor = torch.from_numpy(next_base_quaternion_np).float()
         #prev_base_trans_tensor = torch.from_numpy(prev_base_trans_np).float()
@@ -211,6 +214,7 @@ class Depth_dataset(TorchDataset):
                   "next_frame_img_as_input" : next_image_as_input_tensor,
                   "next_frame_mask_as_input" : next_mask_as_input_tensor,
                   "next_frame_simdepth_as_input" : next_simdepth_as_input_tensor,
+                  "next_frame_whole_simdepth_as_input" : next_whole_simdepth_as_input_tensor,
                   "next_frame_base_quaternion" : next_base_quaternion_tensor,
                   "next_frame_base_trans" : next_base_trans_tensor,
                   "next_frame_kps_wrt_cam" : next_kps_wrt_cam_tensor,

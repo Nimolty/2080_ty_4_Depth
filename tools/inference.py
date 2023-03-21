@@ -163,6 +163,7 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
 
 
 if __name__ == "__main__":
+    torch.multiprocessing.set_start_method('spawn')
     cfg, args = update_config()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu' )
     model_cfg = cfg["MODEL"]
@@ -174,7 +175,7 @@ if __name__ == "__main__":
     optim_cfg = cfg["OPTIMIZER"]
     optimizer = get_optimizer(model, optim_cfg["NAME"], optim_cfg["LR"], optim_cfg["WEIGHT_DECAY"])
     
-    this_ckpt_path = "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/15/CHECKPOINT/model.pth"
+    this_ckpt_path = "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/20/CHECKPOINT/model.pth"
     model, optimizer, start_epoch = load_model(model, this_ckpt_path, optim_cfg["LR"], optimizer)
     model = model.to(device)
     network_inference(model, cfg, 38, device)
