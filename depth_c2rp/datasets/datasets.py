@@ -101,7 +101,7 @@ class Depth_dataset(TorchDataset):
         
         # generate image and transform to network input resolution
         #prev_image = crop_and_resize_img(prev_frame_img_path, self.input_resolution) # �Ѿ�resize�õ�, hxwx3
-        next_image = crop_and_resize_img(next_frame_img_path, self.input_resolution)
+        next_image, _ = crop_and_resize_img(next_frame_img_path, self.input_resolution)
 #        print('prev_image.shape', prev_image.shape)
         #assert prev_image.shape[0] == self.input_resolution[0]
         #assert prev_image.shape[1] == self.input_resolution[1]

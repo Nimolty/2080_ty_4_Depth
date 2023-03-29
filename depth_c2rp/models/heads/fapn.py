@@ -4,7 +4,7 @@ from torch.nn import functional as F
 from torchvision.ops import DeformConv2d
 import time
 from depth_c2rp.models.layers import ConvModule, ConvModule3
-from depth_c2rp.models.backbones import ResNet
+from depth_c2rp.models.backbones import ResNet, ResT, ConvNeXt, PoolFormer
 
 class DCNv2(nn.Module):
     def __init__(self, c1, c2, k, s, p, g=1):
@@ -58,12 +58,13 @@ class FAM(nn.Module):
 
 
 class FaPNHead(nn.Module):
-    def __init__(self, in_channels, num_joints, output_h, output_w, num_classes=19, channel=128): 
+    def __init__(self, in_channels, num_joints, output_h, output_w, num_classes=19, channel=128, rot_type="quaternion"): 
         super().__init__()
         in_channels = in_channels[::-1]
         self.num_joints = num_joints
         self.align_modules = nn.ModuleList([ConvModule(in_channels[0], channel, 1)])
         self.output_convs = nn.ModuleList([])
+        self.rot_type = rot_type
 
         for ch in in_channels[1:]:
             self.align_modules.append(FAM(ch, channel))
@@ -76,8 +77,13 @@ class FaPNHead(nn.Module):
         
         # build quaternion and trans head
         self.qt_common_head = nn.Sequential(*ConvModule3(channel, channel//2), *ConvModule(channel//2, channel//4))
-        self.trans_head = nn.Linear(channel//4 * output_h *output_w, 3) # 这里要改掉的
-        self.quat_head = nn.Linear(channel//4 * output_h * output_w, 4)
+        if self.rot_type == "quaternion":
+            self.trans_head = nn.Linear(channel//4 * output_h *output_w, 3) # 这里要改掉的
+            self.quat_head = nn.Linear(channel//4 * output_h * output_w, 4)
+        elif self.rot_type == "o6d":
+            self.o6d_head = nn.Linear(channel//4 * output_h *output_w, 9)
+        else:
+            raise ValueError
         
         # build 3D joints and pos
         self.joint_common_head = nn.ModuleList([ConvModule(channel, num_joints), nn.Linear(output_h * output_w, channel), nn.ReLU(True)])
@@ -103,8 +109,14 @@ class FaPNHead(nn.Module):
         mask_out = self.mask_head(out)
         qt_common = self.qt_common_head(out)
         qt_common = qt_common.view(B, -1)
-        trans_out = self.trans_head(qt_common)
-        quat_out = self.quat_head(qt_common)
+        
+        if self.rot_type == "quaternion":
+            trans_out = self.trans_head(qt_common)
+            quat_out = self.quat_head(qt_common)
+        elif self.rot_type == "o6d":
+            o6d_out = self.o6d_head(qt_common)
+        else:
+            raise ValueError
 
         
         for idx, fc in enumerate(self.joint_common_head):
@@ -115,9 +127,15 @@ class FaPNHead(nn.Module):
                 joint_out = fc(joint_out)
         
         #joint_3d = self.joint_3d_head(joint_out)
-        joint_pos = self.joint_pos_head(joint_out)
+        joint_out = self.joint_pos_head(joint_out)
         
-        return mask_out, trans_out, quat_out, joint_pos 
+        if self.rot_type == "quaternion":
+            return mask_out, trans_out, quat_out, joint_out
+        elif self.rot_type == "o6d":
+            return mask_out, o6d_out, joint_out
+        else:
+            return None
+        
 
 
 if __name__ == '__main__':
@@ -126,16 +144,31 @@ if __name__ == '__main__':
         print('Cuda True')
     else:
         print('False')
+    
+    # backbone = ResNet('18').cuda()
+    # head = FaPNHead([64, 128, 256, 512], 11, 100, 100).cuda()
 
-    backbone = ResNet('18').cuda()
-    # head = FaPNHead([256, 512, 1024, 2048], 128, 19)
+    # backbone = ResNet('50').cuda()
+    # head = FaPNHead([256, 512, 1024, 2048], 11, 100, 100).cuda()
     
-    head = FaPNHead([64, 128, 256, 512], 2, 128).cuda()
+    # backbone = ResT('S').cuda()
+    # head = FaPNHead([64, 128, 256, 512], 11, 100,100).cuda()
     
+#    backbone = ResT('B').cuda()
+#    head = FaPNHead([96, 192, 384, 768], 11, 100,100).cuda()
+
+#    backbone = ResT('L').cuda()
+#    head = FaPNHead([96, 192, 384, 768], 11, 100,100).cuda()
+
+#    backbone = ConvNeXt("B").cuda()
+#    head = FaPNHead([128, 256, 512, 1024],11, 100, 100).cuda()
+    
+    backbone = PoolFormer("M36").cuda()
+    head = FaPNHead([96, 192, 384, 768], 11, 100, 100).cuda()
     
     for i in range(300):
         start_time = time.time()
-        x = torch.randn(1, 3, 720, 1280).cuda()
+        x = torch.randn(1, 11, 400, 400).cuda()
         end_time = time.time()
         
         print("Image Construction", end_time - start_time) 
@@ -145,12 +178,12 @@ if __name__ == '__main__':
         time2 = time.time()
         out = head(features)
         time3 = time.time()
-        # print('out.shape', out.shape)
-        out = F.interpolate(out, size=x.shape[-2:], mode='bilinear', align_corners=False)
+        print('out.shape', out[1].shape)
+        out = F.interpolate(out[0], size=x.shape[-2:], mode='bilinear', align_corners=False)
         time4 = time.time()
         print('backbone time', time2 - time1)    
         print('FaPN head time', time3 - time2) 
         print('Up sampling time', time4 - time3)    
         print('all_time', time4 - time1)
         
-    print(out.shape)
+    #print(out.shape)

@@ -30,7 +30,8 @@ from depth_c2rp.utils.utils import save_model, load_model, exists_or_mkdir, visu
 from depth_c2rp.utils.utils import check_input, visualize_validation_loss, load_camera_intrinsics, visualize_training_lr, set_random_seed, reduce_mean
 from depth_c2rp.configs.config import update_config
 from depth_c2rp.datasets.datasets import Depth_dataset
-from inference import network_inference
+#from inference import network_inference
+from inference_multi_dr import network_inference
 
 #def reduce_tensor(losses, num_gpus):
 #    losses_copy = {}
@@ -230,7 +231,7 @@ def main(cfg):
                     
                     val_batch_gt_masks, val_batch_gt_joints_pos, val_batch_gt_joints_wrt_cam, val_batch_gt_joints_wrt_rob = val_batch["next_frame_mask_as_input"].to(device), \
                     val_batch["next_frame_joints_pos"].to(device), val_batch["next_frame_joints_wrt_cam"].to(device), val_batch["next_frame_joints_wrt_rob"].to(device)
-                    middle_time = time.time()
+                    middle_time = time.time() 
                     val_mask_out, val_trans_out, val_quat_out,val_joint_pos = model(val_next_input)
                     end_time = time.time()
                     
@@ -253,9 +254,9 @@ def main(cfg):
                 #torch.cuda.empty_cache()
         
         # Inference
-        if epoch % 5 == 0 and dist.get_rank() == 0: 
-            add_results, mAP_dict = network_inference(model, cfg, epoch, device)
-            visualize_inference_results(add_results, mAP_dict, writer, epoch)
+        if epoch % 5 == 0 and dist.get_rank() == 0:  
+            add_results, mAP_dict, angles_dict = network_inference(model, cfg, epoch, device)
+            visualize_inference_results(add_results, mAP_dict, angles_dict, writer, epoch)
 
     
     

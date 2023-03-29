@@ -26,7 +26,35 @@ def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
     positive_mask = x > 0
     ret[positive_mask] = torch.sqrt(x[positive_mask])
     return ret
+
+def load_pretrained(model, model_path,info=None):
+    state_dict_ = torch.load(model_path, map_location='cpu')
+    state_dict = {}
     
+    for k in state_dict_:
+        state_dict[k] = state_dict_[k]
+    
+#    if len(state_dict.keys()) == 1 and "model" in state_dict:
+#        for k in state_dict_["model"]:
+#            state_dict[k] = state_dict_["model"][k]
+#        del state_dict["model"]
+        
+    model_state_dict = model.state_dict()
+    #print("state_dict_", state_dict_.keys())
+    #print("state_dict", state_dict["model"].keys())
+    #print("model_state_dict", model_state_dict.keys())
+    for k in state_dict_:
+        if k in model_state_dict:
+            if (state_dict_[k].shape != model_state_dict[k].shape):
+                print('Skip loading parameter {}, required shape{}, '\
+                  'loaded shape{}.'.format(
+                k, model_state_dict[k].shape, state_dict_[k].shape))
+                state_dict[k] = model_state_dict[k]
+        else:
+            del state_dict[k]
+    model.load_state_dict(state_dict, strict=False)
+    return model
+        
 
 def save_model(path, epoch, model, optimizer=None):
   if isinstance(model, torch.nn.DataParallel):
@@ -148,11 +176,17 @@ def visualize_training_lr(lr, writer, batch_idx, epoch, data_loader_length):
     writer.add_scalar(f"LR/Learning_Rate", lr, batch_idx + (epoch-1) * data_loader_length)
 
 
-def visualize_inference_results(add_res, mAP_res, writer, epoch):
-    for key, value in add_res.items():
-        writer.add_scalar(f"Add/{key}", value, epoch)
-    for key, value in mAP_res.items():
-        writer.add_scalar("mAP/{:.5f} m".format(float(key)), value, epoch)
+def visualize_inference_results(ass_add_res, ass_mAP_res, ori_add_res, ori_mAP_res, angles_res, writer, epoch):
+    for key, value in ass_add_res.items():
+        writer.add_scalar(f"Ass_Add/{key}", value, epoch)
+    for key, value in ass_mAP_res.items():
+        writer.add_scalar("Ass_3D_ACC/{:.5f} m".format(float(key)), value, epoch)
+    for key, value in ori_add_res.items():
+        writer.add_scalar(f"Ori_Add/{key}", value, epoch)
+    for key, value in ori_mAP_res.items():
+        writer.add_scalar("Ori_3D_ACC/{:.5f} m".format(float(key)), value, epoch)
+    for key, value in angles_res.items():
+        writer.add_scalar("Angles_ACC/{:.5f} degree".format(float(key)), value, epoch)
     
  
 def find_seq_data_in_dir(input_dir):
@@ -273,6 +307,57 @@ def load_keypoints_and_joints(json_path, keypoint_names, joint_names):
     
     return keypoints_res, joints_res
 
+def load_all(json_path, keypoint_names, joint_names):
+    json_in = open(json_path, 'r')
+    json_data = json.load(json_in)[0]
+    keypoints_data = json_data["keypoints"]
+    joints_data = json_data["joints"]
+    joints_2nplus2_data = json_data["joints_2nplus2"]
+    
+    keypoints_res = {
+                    "Projection" : [],
+                    "Part_ID" : [],
+                    "Location_wrt_cam" : [],
+                    "O2C_wxyz" : [],
+                    "Scale" : [],
+                    "Center": []
+                    }
+    joints_res = {
+                 "Angle" : [],
+                 "Location_wrt_cam" : []
+                 }
+    joints_2nplus2_res = {
+                  "Location_wrt_cam" : []
+                  }
+    
+    for idx, kp_name in enumerate(keypoint_names):
+        assert kp_name == keypoints_data[idx]["Name"], \
+        "Expected keypoint '{}' in datafile '{}', but receive '{}' ".format(
+        kp_name, json_path, keypoints_data["Name"]
+        )
+        keypoints_res["Projection"].append(keypoints_data[idx]["projected_location"])
+        keypoints_res["Part_ID"].append(keypoints_data[idx]["Part ID"])
+        keypoints_res["Location_wrt_cam"].append(keypoints_data[idx]["location_wrt_cam"])
+        
+        O2C_mat = torch.from_numpy(np.array(keypoints_data[idx]["R2C_mat"]))
+        O2C_wxyz = matrix_to_quaternion(O2C_mat).numpy().tolist()
+        keypoints_res["O2C_wxyz"].append(O2C_wxyz)
+        
+        
+        keypoints_res["Scale"].append(keypoints_data[idx]["scale"])
+        # keypoints_res["Center"].append(keypoints_data[idx]["center_loc"])
+    for idx, joint_name in enumerate(joint_names):
+        assert joint_name == joints_data[idx]["Name"], \
+        "Expected joint '{}' in datafile '{}', but receive '{}' ".format(
+        joint_name, json_path, joints_data[idx]["Name"]
+        )
+        joints_res["Angle"].append(joints_data[idx]["position"])
+        joints_res["Location_wrt_cam"].append(joints_data[idx]["location_wrt_cam"])
+    
+    for idx, joint_2nplus2_data in enumerate(joints_2nplus2_data):
+        joints_2nplus2_res["Location_wrt_cam"].append(joint_2nplus2_data["location_wrt_cam"])
+    
+    return keypoints_res, joints_res, joints_2nplus2_res
 
 def matrix_to_quaternion(matrix: torch.Tensor) -> torch.Tensor:
     """
@@ -575,17 +660,221 @@ def reduce_mean(losses, num_gpus):
         losses_copy[key] = rt
     return losses_copy
     
+def compute_rotation_matrix_from_ortho6d(poses):
+    """
+    Code from https://github.com/papagina/RotationContinuity
+    On the Continuity of Rotation Representations in Neural Networks
+    Zhou et al. CVPR19
+    https://zhouyisjtu.github.io/project_rotation/rotation.html
+    """
+    assert poses.shape[-1] == 6
+    x_raw = poses[..., 0:3]
+    y_raw = poses[..., 3:6]
+    x = x_raw / torch.norm(x_raw, p=2, dim=-1, keepdim=True)
+    z = torch.cross(x, y_raw, dim=-1)
+    z = z / torch.norm(z, p=2, dim=-1, keepdim=True)
+    y = torch.cross(z, x, dim=-1)
+    matrix = torch.stack((x, y, z), -1)
+    return matrix
+
+def get_K_crop_resize(K, boxes, crop_resize):
+    """
+    Adapted from https://github.com/BerkeleyAutomation/perception/blob/master/perception/camera_intrinsics.py
+    Skew is not handled !
+    """
+    assert K.shape[1:] == (3, 3)
+    assert boxes.shape[1:] == (4, )
+    K = K.float()
+    boxes = boxes.float()
+    new_K = K.clone()
+
+    #orig_size = torch.tensor(orig_size, dtype=torch.float)
+    crop_resize = torch.tensor(crop_resize, dtype=torch.float)
+
+    final_width, final_height = max(crop_resize), min(crop_resize)
+    crop_width = boxes[:, 2] - boxes[:, 0]
+    crop_height = boxes[:, 3] - boxes[:, 1]
+    crop_cj = (boxes[:, 0] + boxes[:, 2]) / 2
+    crop_ci = (boxes[:, 1] + boxes[:, 3]) / 2
+
+    # Crop
+    cx = K[:, 0, 2] + (crop_width - 1) / 2 - crop_cj
+    cy = K[:, 1, 2] + (crop_height - 1) / 2 - crop_ci
+
+    # # Resize (upsample)
+    center_x = (crop_width - 1) / 2
+    center_y = (crop_height - 1) / 2
+    orig_cx_diff = cx - center_x
+    orig_cy_diff = cy - center_y
+    scale_x = final_width / crop_width
+    scale_y = final_height / crop_height
+    scaled_center_x = (final_width - 1) / 2
+    scaled_center_y = (final_height - 1) / 2
+    fx = scale_x * K[:, 0, 0]
+    fy = scale_y * K[:, 1, 1]
+    cx = scaled_center_x + scale_x * orig_cx_diff
+    cy = scaled_center_y + scale_y * orig_cy_diff
+
+    new_K[:, 0, 0] = fx
+    new_K[:, 1, 1] = fy
+    new_K[:, 0, 2] = cx
+    new_K[:, 1, 2] = cy
+    return new_K
+    
+def update_translation(vxvyvz, K, t_init):
+    # t_init.shape : B x 3
+    # vxvyvz.shape : B x 3
+    # K.shape : B x 4 x 4
+    batch_size = vxvyvz.shape[0]
+    assert t_init.shape == (batch_size, 3)
+    assert vxvyvz.shape == (batch_size, 3)
+    assert K.shape == (batch_size, 3, 3)
+    
+    zsrc = t_init[:, [2]]
+    vz = vxvyvz[:, [2]]
+    ztgt = zsrc * vz
+    
+    vxvy = vxvyvz[:, [0,1]]
+    fxfy = K[:, [0,1], [0,1]]
+    xsrcysrc = t_init[:, :2]
+    
+    t_tgt = t_init.clone()
+    t_tgt[:, 2] = ztgt.flatten()
+    t_tgt[:, :2] = ((vxvy / fxfy) + (xsrcysrc / zsrc.repeat(1, 2))) * ztgt.repeat(1, 2)
+    
+    return t_tgt
+    
+def get_gt_vxvyvz(t_init, t_gt, K_crop):
+    B = t_init.shape[0]
+    assert t_init.shape == t_gt.shape
+    assert t_init.shape == (B, 3)
+    
+    vz_gt = t_gt[:, [2]] / t_init[:, [2]]
+    fxfy = K_crop[:, [0, 1], [0, 1]]
+    vxvy_gt = fxfy * (t_gt[:, :2] / t_gt[:, [2]] - t_init[:, :2] / t_init[:, [2]])   
+    vxvyvz_gt = torch.cat([vxvy_gt, vz_gt],dim=1)
+    return vxvyvz_gt
+
+def compute_distengle_loss(vxvyvz, vxvyvz_gt, batch_new_gt_K, batch_t_init, 
+                            batch_dt_rot, batch_gt_rot, batch_sample_pts_wrt_rob, batch_gt_res, l1_or_l2="l1"):
+    # update_translation(batch_dt_poses[..., 6:], batch_new_gt_K, batch_t_init)
+    if l1_or_l2 == "l1":
+        loss_fn = nn.L1Loss()
+    elif l1_or_l2 == "l2":
+        loss_fn = nn.MSELoss()
+    
+    batch_dt_trans_xy = update_translation(torch.cat([vxvyvz[:, :2], vxvyvz_gt[:, [2]]], dim=1), batch_new_gt_K, batch_t_init)
+    batch_dt_xy_res = torch.bmm(batch_gt_rot, batch_sample_pts_wrt_rob.permute(0, 2, 1).contiguous()) + batch_dt_trans_xy[:, :, None]
+    batch_dt_trans_z = update_translation(torch.cat([vxvyvz_gt[:, :2], vxvyvz[:, [2]]], dim=1), batch_new_gt_K, batch_t_init)
+    batch_dt_z_res = torch.bmm(batch_gt_rot, batch_sample_pts_wrt_rob.permute(0, 2, 1).contiguous()) + batch_dt_trans_z[:, :, None]
+    batch_gt_trans = update_translation(vxvyvz_gt, batch_new_gt_K, batch_t_init)
+    batch_dt_rot_res = torch.bmm(batch_dt_rot, batch_sample_pts_wrt_rob.permute(0, 2, 1).contiguous()) + batch_gt_trans[:, :, None]
     
     
+    loss_xy = loss_fn(batch_dt_xy_res, batch_gt_res)
+    loss_z = loss_fn(batch_dt_z_res, batch_gt_res)
+    loss_rot = loss_fn(batch_dt_rot_res, batch_gt_res)
+    return loss_xy + loss_z + loss_rot
+    
+def compute_2nplus2_loss(R, T, Angles, device):
+    # R : B x 3 x 3
+    # T : B x 3 x 1
+    # Angles : B x N
+    B, _, _ = Angles.shape
+    ori_trans_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.333], [0.0,0.0,0.0],\
+                                        [0.0,-0.316,0.0], [0.0825,0.0,0.0],[-0.0825,0.384,0.0],\
+                                        [0.0,0.0,0.0], [0.088,0.0,0.0],[0.0,0.0,0.107],\
+                                        [0.0,0.0,0.0584], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+    ori_angles_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+              [1.5707963267948966,0.0,0.0], [1.5707963267948966,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+               [1.5707963267948966,0.0,0.0],  [1.5707963267948966,0.0,0.0], [0.0,0.0,-1.5707963267948966/2],\
+               [0.0,0.0,0.0], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+    joints_info = [
+              # joint1 and plus 3 pts
+              {"base" : 0, "offset" : [0.0, 0.0, 0.14]},
+              {"base" : 0, "offset" : [0.0, 0.0, 0.24]},
+              {"base" : 0, "offset" : [0.0, 0.1, 0.14]},
+              {"base" : 0, "offset" : [0.1, 0.0, 0.14]},
+              # joint2 and plus 1 pt
+              {"base" : 1, "offset" : [0.0, 0.0, 0.0]},
+              {"base" : 1, "offset" : [0.0, 0.1, 0.0]},
+              # joint3 and plus 1 pt
+              {"base" : 3, "offset" : [0.0, 0.0, -0.1210]},
+              {"base" : 3, "offset" : [0.0, 0.0, -0.0210]},
+              # joint4 and plus 1 pt
+              {"base" : 4, "offset" : [0.0, 0.0, 0.0]},
+              {"base" : 4, "offset" : [0.0, 0.0, 0.1]},
+              # joint5 and plus 1 pt
+              {"base" : 5, "offset" : [0.0, 0.0, -0.2590]},
+              {"base" : 5, "offset" : [0.0, 0.0, -0.1590]},
+              # joint6 and plus 1 pt
+              {"base" :5, "offset" : [0.0, 0.0158, 0.0]},
+              {"base" :5, "offset" : [0.0, 0.1158, 0.0]},
+              # joint7 and plus 1 pt
+              {"base" : 7, "offset" : [0.0, 0.0, 0.0520]},
+              {"base" : 7, "offset" : [0.0, 0.0, 0.1520]},
+              ]
+    
+    ori_mat = torch.eye(3).repeat(B,1).reshape(B,3,3).float().to(device)
+    ori_trans = torch.zeros(B, 3, 1).float().to(device)
+    ori_angles = euler_angles_to_matrix(ori_angles_list, convention="XYZ")
     
     
+    kps_list, R2C_list = [], []
+    for j in range(ori_trans_list.shape[0]):
+        if j == 0:
+            kps_list.append(ori_trans.clone())
+            R2C_list.append(ori_mat.clone())
+            continue
+        this_mat = ori_angles[j].repeat(B, 1).reshape(B, 3, 3)
+        trans = ori_trans_list[j].unsqueeze(0).repeat(B, 1)
+        if 1 <= j <= 7:
+            new_mat = _axis_angle_rotation("Z", Angles[:, j-1, 0])
+            #print("this_mat.shape", this_mat.shape)
+            #print("new_mat.shape", new_mat.shape)
+            this_mat = torch.bmm(this_mat, new_mat)
+        if j == 9:
+            trans = trans + Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+        if j == 10:
+            trans = trans + (-2) * Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+         
+        ori_trans += torch.bmm(ori_mat, trans.unsqueeze(2))
+        ori_mat = torch.bmm(ori_mat, this_mat)
+        kps_list.append(ori_trans.float().clone())
+        R2C_list.append(ori_mat.float().clone())
+        
+    N = len(joints_info)    
+    joints_x3d_rob = torch.zeros(B, N, 3, 1).to(device)
+    for idx in range(len(joints_info)):
+        base_idx, offset = joints_info[idx]["base"], torch.from_numpy(np.array(joints_info[idx]["offset"]))[None, :, None].repeat(B, 1, 1).to(device)
+        this_x3d = torch.bmm(R2C_list[base_idx], offset.float()) + kps_list[base_idx]
+        joints_x3d_rob[:, idx, :, :] = this_x3d.clone()
     
-    
-    
-    
-    
-    
-    
+    joints_x3d_rob = joints_x3d_rob.squeeze(3)
+    joints_x3d_cam= torch.bmm(R, joints_x3d_rob.permute(0, 2, 1).contiguous()) + T
+    return joints_x3d_cam.permute(0,2,1).contiguous()
+
+def compute_DX_loss(dt_pts, gt_pts):
+    B, N, _ = dt_pts.shape
+    assert dt_pts.shape == gt_pts.shape
+    device = dt_pts.device
+    one_vec = torch.full((B, N, 1), 1).to(device).float() # B x N x 1
+    X_dt = torch.bmm(dt_pts, dt_pts.permute(0, 2, 1)) # B x N x N
+    X_gt = torch.bmm(gt_pts, gt_pts.permute(0, 2, 1)) # B x N x N
+    diag_X_dt = torch.diagonal(X_dt, dim1=-1, dim2=-2).unsqueeze(2) # B x N x 1
+    diag_X_gt = torch.diagonal(X_gt, dim1=-1, dim2=-2).unsqueeze(2) # B x N x 1
+
+    D_dt = torch.bmm(diag_X_dt, one_vec.permute(0, 2, 1)) + \
+           torch.bmm(one_vec, diag_X_dt.permute(0, 2, 1)) - \
+           2 * X_dt
+    D_gt = torch.bmm(diag_X_gt, one_vec.permute(0, 2, 1)) + \
+           torch.bmm(one_vec, diag_X_gt.permute(0, 2, 1)) - \
+           2 * X_gt
+    #print(torch.tril(D_dt))
+    #print(torch.sum((D_dt - D_gt) ** 2))
+    return torch.norm(torch.tril(D_dt) - torch.tril(D_gt)) 
     
  
  

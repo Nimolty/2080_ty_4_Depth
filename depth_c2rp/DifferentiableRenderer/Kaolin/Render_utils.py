@@ -83,7 +83,7 @@ def load_part_mesh(paths, device):
     for idx, path in enumerate(paths):
         this_mesh = kal.io.obj.import_mesh(path, with_materials=True, with_normals=True)
         vertices = this_mesh.vertices.unsqueeze(0).to(device)
-        normals = this_mesh.vertex_normals.cuda().unsqueeze(0)
+        normals = this_mesh.vertex_normals.to(device).unsqueeze(0)
         vertices.requires_grad = False
         faces = this_mesh.faces.to(device)
         faces.requires_grad=False
@@ -551,7 +551,22 @@ def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
 #    else:
 #        return True
 
-
+def compute_rotation_matrix_from_ortho6d(poses):
+    """
+    Code from https://github.com/papagina/RotationContinuity
+    On the Continuity of Rotation Representations in Neural Networks
+    Zhou et al. CVPR19
+    https://zhouyisjtu.github.io/project_rotation/rotation.html
+    """
+    assert poses.shape[-1] == 6
+    x_raw = poses[..., 0:3]
+    y_raw = poses[..., 3:6]
+    x = x_raw / torch.norm(x_raw, p=2, dim=-1, keepdim=True)
+    z = torch.cross(x, y_raw, dim=-1)
+    z = z / torch.norm(z, p=2, dim=-1, keepdim=True)
+    y = torch.cross(z, x, dim=-1)
+    matrix = torch.stack((x, y, z), -1)
+    return matrix
 
 
 

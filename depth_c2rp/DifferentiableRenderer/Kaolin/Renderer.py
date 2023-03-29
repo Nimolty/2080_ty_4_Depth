@@ -6,9 +6,10 @@ from matplotlib import pyplot as plt
 import cv2
 import numpy as np
 import time
+import random
 from PIL import Image as PILImage
 from .Render_utils import projectiveprojection_real, euler_angles_to_matrix, load_part_mesh, concat_part_mesh, exists_or_mkdir
-from .Render_utils import quaternion_to_matrix, matrix_to_quaternion, euler_angles_to_matrix, matrix_to_euler_angles, seg_and_transform
+from .Render_utils import quaternion_to_matrix, matrix_to_quaternion, euler_angles_to_matrix, matrix_to_euler_angles, seg_and_transform, compute_rotation_matrix_from_ortho6d
 from tqdm import tqdm
 import argparse
 import os
@@ -45,13 +46,18 @@ class DiffPFDepthRenderer():
         #print("self.ori_vertices.shape", self.ori_vertices.shape)
         #print("self.face_indexs.shape", self.face_indexs.shape)        
     
-    def concat_mesh(self):
+    def concat_mesh(self, rot_type="quaternion"):
         self.vertices_list_, self.joints_x3d_rob, self.R2C_list, self.T_list = concat_part_mesh(self.vertices_list, self.joints_pos, self.device,True)
         self.vertices = torch.cat(self.vertices_list_,dim=1)
         self.faces = torch.cat(self.faces_list,dim=0)
         
-        self.quaternion_norm = self.quaternion / torch.norm(self.quaternion, dim=-1,keepdim=True)
-        self.Rot_matrix = quaternion_to_matrix(self.quaternion_norm)
+        if rot_type == "quaternion":
+            self.quaternion_norm = self.quaternion / torch.norm(self.quaternion, dim=-1,keepdim=True)
+            self.Rot_matrix = quaternion_to_matrix(self.quaternion_norm)
+        elif rot_type == "o6d":
+            self.Rot_matrix = compute_rotation_matrix_from_ortho6d(self.o6dposes)
+        else:
+            raise ValueError
 #        print("self.translation.shape", self.translation.shape)
 #        print("self.joints_x3d_rob", self.joints_x3d_rob.shape)
 #        print("self.Rot_matrix.shape", self.Rot_matrix.shape)
@@ -107,18 +113,18 @@ class DiffPFDepthRenderer():
 #        save_path = f"./check_depths/{update_idx}_imgs"
 #        exists_or_mkdir(save_path)
 #        print("self.render_depth_image.shape", self.render_depth_image.shape)
-        B, H, W, C = self.render_depth_image.shape
-        res = np.zeros_like(self.render_depth_image.detach().cpu().numpy())
-        
-        for b in range(self.render_depth_image.shape[0]):
-#            np.savetxt(f"./check_depths/rendered_{b}_xyz.txt", self.render_depth_image[b].reshape(-1,3).detach().cpu().numpy() * np.array([1.0,-1.0,-1.0]))          
-            
-            render_mask_image = PILImage.fromarray((depth_valid_render_mask[b].detach().cpu().numpy()).astype(np.uint8) * 255)
-            gt_rgb_image = PILImage.open(img_path[b]).convert("RGB")
-            blend_image = PILImage.blend(render_mask_image, gt_rgb_image, 0.7)
-            #blend_image.save(os.path.join(save_path, f"{b}_blend.png"))
-            blend_image_np = np.array(blend_image)
-            res[b] = blend_image_np
+#        B, H, W, C = self.render_depth_image.shape
+#        res = np.zeros_like(self.render_depth_image.detach().cpu().numpy())
+#        
+#        for b in range(self.render_depth_image.shape[0]):
+##            np.savetxt(f"./check_depths/rendered_{b}_xyz.txt", self.render_depth_image[b].reshape(-1,3).detach().cpu().numpy() * np.array([1.0,-1.0,-1.0]))          
+#            
+#            render_mask_image = PILImage.fromarray((depth_valid_render_mask[b].detach().cpu().numpy()).astype(np.uint8) * 255)
+#            gt_rgb_image = PILImage.open(img_path[b]).convert("RGB")
+#            blend_image = PILImage.blend(render_mask_image, gt_rgb_image, 0.7)
+#            #blend_image.save(os.path.join(save_path, f"{b}_blend.png"))
+#            blend_image_np = np.array(blend_image)
+#            res[b] = blend_image_np
             #print("blend_image_np.shape", blend_image_np.shape)
 #            cv2.imwrite(f"./check_depths/rendered_{b}_masked_depth.png", (all_depth[b][:, :, 2:3]*(-255)).detach().cpu().numpy())
 #            cv2.imwrite(f"./check_depths/rendered_{b}_depth.png", (self.render_depth_image[b][:, :, 2:3]*(-255)).detach().cpu().numpy())
@@ -129,7 +135,7 @@ class DiffPFDepthRenderer():
             
         self.loss = self.loss_fn((self.render_depth_image * test_mask)[:, :, :, 2:3].float() * (-1.0), (input_depth * test_mask).float())
         print(self.loss)  
-        return res
+        #return res
     
     def loss_backward(self):
         self.loss.backward()
@@ -163,6 +169,25 @@ class DiffPFDepthRenderer():
     def GA_optimizer_step(self):
         self.GA_optimizer.step()
     
+    def set_o6dpose_optimizer(self, o6dposes, translation, joints_pos):
+        assert o6dposes.shape[-1] == 6
+        self.o6dposes = o6dposes
+        self.translation = translation
+        self.joints_pos = joints_pos
+        self.RT_optimizer = torch.optim.Adam(params=[self.o6dposes, self.translation], lr=self.RT_lr)
+        self.GA_optimizer = torch.optim.Adam(params=[self.joints_pos], lr=self.GA_lr)
+    
+    def load_joints(self, joints_pos):
+        self.joints_pos = joints_pos # B x N x 1
+    
+    def concat_and_sample_mesh(self, num_pts):
+        self.vertices_list_, self.joints_x3d_rob, self.R2C_list, self.T_list = concat_part_mesh(self.vertices_list, self.joints_pos, self.device,True)
+        self.vertices = torch.cat(self.vertices_list_,dim=1)
+        _, N, _ = self.vertices.shape
+        index = random.sample(range(N), num_pts)
+        return self.vertices[:, index, :]
+        #print("self.vertices.shape", self.vertices.shape)
+    
 
 if __name__ == "__main__":
     cfg = dict()
@@ -193,9 +218,9 @@ if __name__ == "__main__":
     
     
     
-    gripper_dis = torch.from_numpy(np.array([0.013713414900289229])).float().to(device)
+    #gripper_dis = torch.from_numpy(np.array([0.013713414900289229])).float().to(device)
     joints_angle = torch.from_numpy(np.array([1.7010560821567642, 0.27977565142150723, -2.761883936874502, -2.430359192417069, \
-                                         1.1527790406734584, 2.61622873174606, 0.2907628764894636
+                                         1.1527790406734584, 2.61622873174606, 0.2907628764894636, 0.013713414900289229
                                         ])).float().to(device)
     
     gripper_dis = gripper_dis.unsqueeze(0)
@@ -203,27 +228,29 @@ if __name__ == "__main__":
     gripper_dis.requires_grad = True
     joints_angle.requires_grad = True
     
-    DF.set_optimizer(quaternion, translation, gripper_dis, joints_angle)
+    DF.load_joints(joints_angle)
+    DF.concat_and_sample_mesh(num_pts=1000)
+#    DF.set_optimizer(quaternion, translation, gripper_dis, joints_angle)
     
-    depth_gt = np.loadtxt(f"./gt/depth_robot_gt.txt")
-    depth_gt_tensor = torch.from_numpy(depth_gt.reshape(1, height,width, -1)).to(device) 
-    depth_gt_mask = np.loadtxt(f"./gt/mask_robot_gt.txt")
-    depth_gt_mask_tensor = torch.from_numpy(depth_gt_mask.reshape(1, height,width, -1)).float().to(device) 
-    depth_gt_mask_tensor.requires_grad = False
+#    depth_gt = np.loadtxt(f"./gt/depth_robot_gt.txt")
+#    depth_gt_tensor = torch.from_numpy(depth_gt.reshape(1, height,width, -1)).to(device) 
+#    depth_gt_mask = np.loadtxt(f"./gt/mask_robot_gt.txt")
+#    depth_gt_mask_tensor = torch.from_numpy(depth_gt_mask.reshape(1, height,width, -1)).float().to(device) 
+#    depth_gt_mask_tensor.requires_grad = False
 
     
-    num = 10
-    for i in range(num):
-        DF.RT_optimizer_zero_grad()
-        DF.GA_optimizer_zero_grad()
-        
-        DF.concat_mesh()
-        DF.Rasterize()
-        DF.loss_forward(depth_gt_tensor, depth_gt_mask_tensor)
-        DF.loss_backward()
-        
-        DF.RT_optimizer_step()
-        DF.GA_optimizer_step()
+#    num = 10
+#    for i in range(num):
+#        DF.RT_optimizer_zero_grad()
+#        DF.GA_optimizer_zero_grad()
+#        
+#        DF.concat_mesh()
+#        DF.Rasterize()
+#        DF.loss_forward(depth_gt_tensor, depth_gt_mask_tensor)
+#        DF.loss_backward()
+#        
+#        DF.RT_optimizer_step()
+#        DF.GA_optimizer_step()
     
 
 

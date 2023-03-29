@@ -9,6 +9,7 @@ MODEL:
   IN_CHANNELS   : [64, 128, 256, 512]                                 # [64, 128, 256, 512] for ResNet_18 ; [256, 512, 1024, 2048] for ResNet_50
   PRETRAINED    : "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/pretrained/resnet18_a1.pth"              # backbone model's weight 
   SEED          : 317
+  ROT_TYPE      : quaternion
 
 DATASET:
   NAME          : HELEN                                               # dataset name to be trained with (camvid, cityscapes, ade20k)
@@ -46,12 +47,14 @@ DR:
                     ] 
   RT_LR           : 0.01
   GA_LR           : 0.01
+  #NUM_OF_SAMPLE_PTS : 3000
 
 LOSS:
   NAME          : CrossEntropy          # loss function name (OhemCrossEntropy, CrossEntropy, Dice)
   CLS_WEIGHTS   : false            # use class weights in loss calculation
   IGNORE_LABELS : 255
   WEIGHTS       : [0.1, 1.0, 0.1, 1.0] # mask_loss, joint_3d_loss, joint_pos_loss, rt_loss 
+  #RT_LOSS_TYPE  : entangle
 
 OPTIMIZER:
   NAME          : adamw           # optimizer name

@@ -2,6 +2,7 @@ import torch
 from depth_c2rp.models.heads import *
 from depth_c2rp.models.backbones import *
 from depth_c2rp.models.layers import *
+from depth_c2rp.utils.utils import load_pretrained
 from torch.nn import functional as F
 from torch.nn.modules import Module
 from torch.nn.parallel.scatter_gather import gather
@@ -12,37 +13,37 @@ from torch.nn.parallel._functions import Scatter, Gather
 
 
 head_names = {"FaPN": FaPNHead}
-backbone_names = {"ResNet" : ResNet}
+backbone_names = {"ResNet" : ResNet, "ResT" : ResT, "ConvNeXt" : ConvNeXt, "PoolFormer" : PoolFormer}
 
 class build_network(nn.Module):
-    def __init__(self, backbone, head):
+    def __init__(self, backbone, head, rot_type="quaternion"):
         super().__init__()
         self.backbone = backbone
         self.head = head
+        self.rot_type = rot_type
     
     def init_pretrained(self, pretrained):
         if pretrained:
-            self.backbone.load_state_dict(torch.load(pretrained, map_location='cpu'), strict=False)
+            # self.backbone.load_state_dict(torch.load(pretrained, map_location='cpu'), strict=False)
+            load_pretrained(self.backbone, pretrained)
             print('pretrain done!')
     
     def forward(self, _input):
         # _input的shape为BxCxHxW
         B, C, H, W = _input.shape
         out = self.backbone(_input)
-        mask_out, trans_out, quat_out, joint_pos = self.head(out)
-        
-#        print('qt shape', quat_out.shape)
-#        print('trans shape', trans_out.shape)
-#        print('joint_pos shape', joint_pos.shape)
-#        print('joint_3d shape', joint_3d.shape)
-#        print('before', mask_out.shape)
-        
-        mask_out = F.interpolate(mask_out, size=[H, W], mode='bilinear', align_corners=False)
-        
-#        print('after', mask_out.shape)
-        return mask_out, trans_out, quat_out, joint_pos
-        
-def build_model(backbone_all, head_name, model_classes, in_channels, num_joints, output_h, output_w):
+        if self.rot_type == "quaternion":
+            mask_out, trans_out, quat_out, joint_pos = self.head(out)
+            mask_out = F.interpolate(mask_out, size=[H, W], mode='bilinear', align_corners=False)
+            return mask_out, trans_out, quat_out, joint_pos
+        elif self.rot_type == "o6d":
+            mask_out, poses_out, joint_pos = self.head(out)
+            mask_out = F.interpolate(mask_out, size=[H, W], mode='bilinear', align_corners=False)
+            return mask_out, poses_out, joint_pos
+        else:
+            raise ValueError
+
+def build_model(backbone_all, head_name, model_classes, in_channels, num_joints, output_h, output_w, rot_type="quaternion"):
     # backbone_name应该形如ResNet_18, ResNet_34诸如此类
     # head_name应该形如FaPN
     # model_classes 是表示最后的分类数量，str
@@ -54,8 +55,8 @@ def build_model(backbone_all, head_name, model_classes, in_channels, num_joints,
     assert head_name in head_names
     
     backbone = backbone_names[backbone_name](backbone_index)
-    head = head_names[head_name](in_channels, num_joints, output_h, output_w, model_classes)
-    return build_network(backbone, head)
+    head = head_names[head_name](in_channels, num_joints, output_h, output_w, model_classes, rot_type=rot_type)
+    return build_network(backbone, head, rot_type)
 
 
 

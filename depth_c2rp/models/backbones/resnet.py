@@ -101,9 +101,9 @@ class ResNet(nn.Module):
 
 
 if __name__ == '__main__':
-    model = ResNet('18')
+    model = ResNet('50')
     # model.load_state_dict(torch.load('C:\\Users\\sithu\\Documents\\weights\\backbones\\resnet\\resnet18_a1.pth', map_location='cpu'), strict=False)
-    x = torch.zeros(1, 3, 224, 224)
+    x = torch.zeros(1, 11, 224, 224)
     outs = model(x)
     for y in outs:
         print(y.shape) 

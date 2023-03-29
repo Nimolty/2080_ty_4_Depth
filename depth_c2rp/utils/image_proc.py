@@ -12,6 +12,7 @@ import torch.nn.functional as F
 import torch
 import torchvision.transforms as transforms
 import time
+import transforms3d
 # import OpenEXR
 
 os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"
@@ -75,7 +76,7 @@ def crop_and_resize_img(image_path, input_resolution):
 #    print('max', np.max(img))
 #    print('min', np.min(img))
     
-    return img
+    return img, [crop_w, crop_h, img_ori_w-crop_w, img_ori_h-crop_h]
 
 # 深度图转为点云
 def DepthToPointCloud(depthImage, f):
@@ -412,7 +413,6 @@ def batch_resize_masks_inference(batch_dt_mask, img_size):
     res[:, :, :, padding_size : img_w - padding_size] = batch_dt_mask_argmax
     return res.permute(0,2,3,1).repeat(1,1,1,3)
     
-
 
 if __name__ == "__main__":
     image_path = "/DATA/disk1/hyperplane/Depth_C2RP/Data/TY/03206/0029_color.png"

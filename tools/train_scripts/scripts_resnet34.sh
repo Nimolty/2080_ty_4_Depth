@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=1,2,3 python -m torch.distributed.launch --nproc_per_node=3 train.py --exp_id 21 --cfg /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_resnet34.yaml

@@ -45,8 +45,10 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
     img_h, img_w = train_cfg["IMAGE_SIZE"]
     img_size = (img_h, img_w)
     # Inference 
-    add = []
-    mAP = []
+    ass_add = []
+    ass_mAP = []
+    ori_add = []
+    ori_mAP = []
     angles_acc = []
     K = torch.tensor([
                     [502.30, 0.0, 319.5],
@@ -135,37 +137,47 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
 #                print("batch_dt_joints_pos", batch_dt_joints_pos.grad)
                 
         
-        grid_image = make_grid(torch.from_numpy(all_res), 1, normalize=False, scale_each=False) 
-#        print("grid_image.shape", grid_image.shape) 
-#        grid_image = PILImage.fromarray((grid_image.detach().cpu().numpy()))
-#        grid_image.save(os.path.join(save_path, f"blend.png"))
-#        grid_image = grid_image.detach().cpu().numpy()
-#        grid_image = cv2.cvtColor(grid_image, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(os.path.join(save_path, f"blend.png"), grid_image.detach().cpu().numpy().transpose(1,2,0)[:,:,::-1])
-        
-        break                
+#        grid_image = make_grid(torch.from_numpy(all_res), 1, normalize=False, scale_each=False) 
+##        print("grid_image.shape", grid_image.shape) 
+##        grid_image = PILImage.fromarray((grid_image.detach().cpu().numpy()))
+##        grid_image.save(os.path.join(save_path, f"blend.png"))
+##        grid_image = grid_image.detach().cpu().numpy()
+##        grid_image = cv2.cvtColor(grid_image, cv2.COLOR_RGB2BGR)
+#        cv2.imwrite(os.path.join(save_path, f"blend.png"), grid_image.detach().cpu().numpy().transpose(1,2,0)[:,:,::-1])
+#        
+#        break                
             
         
         
         batch_dt_quaternion_norm = batch_dt_quaternion / torch.norm(batch_dt_quaternion, dim=-1,keepdim=True)
         batch_rot = batch_quaternion_matrix(batch_dt_quaternion_norm.T)
-        batch_dt_joints_wrt_cam = compute_concat_loss(batch_rot, batch_dt_trans[:, :, None], batch_dt_joints_pos, batch_rot.device)
+        
+        batch_dt_joints_wrt_cam_ass = compute_concat_loss(batch_rot, batch_dt_trans[:, :, None], batch_dt_joints_pos, batch_rot.device)
+        batch_dt_joints_wrt_cam_ori = (torch.bmm(batch_rot, batch_gt_joints_wrt_rob.permute(0, 2, 1).contiguous()) + batch_dt_trans[:, :, None]).permute(0,2,1) 
+        
         batch_dt_trans = batch_dt_trans.detach().cpu().numpy()
         batch_dt_quaternion = batch_dt_quaternion.detach().cpu().numpy()
         batch_dt_joints_pos = batch_dt_joints_pos.detach().cpu().numpy()
         batch_gt_joints_pos = batch_gt_joints_pos.detach().cpu().numpy()
-        batch_dt_joints_wrt_cam = batch_dt_joints_wrt_cam.detach().cpu().numpy()
+        batch_dt_joints_wrt_cam_ass = batch_dt_joints_wrt_cam_ass.detach().cpu().numpy()
+        batch_dt_joints_wrt_cam_ori = batch_dt_joints_wrt_cam_ori.detach().cpu().numpy()
         batch_gt_joints_wrt_cam = batch_gt_joints_wrt_cam.detach().cpu().numpy()
         batch_gt_joints_wrt_rob = batch_gt_joints_wrt_rob.detach().cpu().numpy()
         batch_xyz_rp = batch["next_xyz_rp"].numpy()
         #print("test_batch_xyz_rp", batch_xyz_rp)
         batch_size = batch_gt_base_quaternion.shape[0]
         
-        add_mean = batch_add_from_pose(batch_dt_joints_wrt_cam, batch_gt_joints_wrt_cam) # list of size B
-        add = add + add_mean
+        ass_add_mean = batch_add_from_pose(batch_dt_joints_wrt_cam_ass, batch_gt_joints_wrt_cam) # list of size B
+        ass_add = ass_add + ass_add_mean
         
-        mAP_mean = batch_mAP_from_pose(batch_dt_joints_wrt_cam, batch_gt_joints_wrt_cam,thresholds) # 
-        mAP.append(mAP_mean)
+        ass_mAP_mean = batch_mAP_from_pose(batch_dt_joints_wrt_cam_ass, batch_gt_joints_wrt_cam,thresholds) # 
+        ass_mAP.append(ass_mAP_mean)
+        
+        ori_add_mean = batch_add_from_pose(batch_dt_joints_wrt_cam_ori, batch_gt_joints_wrt_cam) # list of size B
+        ori_add = ori_add + ori_add_mean
+        
+        ori_mAP_mean = batch_mAP_from_pose(batch_dt_joints_wrt_cam_ori, batch_gt_joints_wrt_cam,thresholds) # 
+        ori_mAP.append(ori_mAP_mean)
         #print(np.array(mAP).shape)
         
         
@@ -174,10 +186,12 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
             
             
     #print("thresh_length", thresh_length)
-    add_results = add_metrics(np.array(add), add_thresh)
-    print(np.array(mAP).shape)
-    mAP_results = np.round(np.mean(mAP, axis=0) * 100, 2)
-    mAP_dict = dict()
+    ass_add_results = add_metrics(np.array(ass_add), add_thresh)
+    ass_mAP_results = np.round(np.mean(ass_mAP, axis=0) * 100, 2)
+    ass_mAP_dict = dict()
+    ori_add_results = add_metrics(np.array(ori_add), add_thresh)
+    ori_mAP_results = np.round(np.mean(ori_mAP, axis=0) * 100, 2)
+    ori_mAP_dict = dict()
     angles_results = np.round(np.mean(angles_acc,axis=0)*100, 2)
     angles_dict = dict()
     
@@ -194,38 +208,68 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
         f, "Analysis results for dataset: {}".format(testing_data_dir)
         )
         print_to_screen_and_file(
-        f, "Number of frames in this dataset: {}".format(len(add))
+        f, "Number of frames in this dataset: {}".format(len(ass_add))
         )
         print_to_screen_and_file(f, "")
         
         # print add
+# print add
         print_to_screen_and_file(
-            f, " ADD AUC: {:.5f}".format(add_results["add_auc"])
+            f, " ADD AUC: {:.5f}".format(ass_add_results["add_auc"])
         )
         print_to_screen_and_file(
             f,
-               " ADD  AUC threshold: {:.5f} m".format(add_results["add_auc_thresh"]),
+               " ADD  AUC threshold: {:.5f} m".format(ass_add_results["add_auc_thresh"]),
         )
         print_to_screen_and_file(
-            f, " ADD  Mean: {:.5f}".format(add_results["add_mean"])
+            f, " ADD  Mean: {:.5f}".format(ass_add_results["add_mean"])
         )
         print_to_screen_and_file(
-            f, " ADD  Median: {:.5f}".format(add_results["add_median"])
+            f, " ADD  Median: {:.5f}".format(ass_add_results["add_median"])
         )
         print_to_screen_and_file(
-            f, " ADD  Std Dev: {:.5f}".format(add_results["add_std"]))
+            f, " ADD  Std Dev: {:.5f}".format(ass_add_results["add_std"]))
+        print_to_screen_and_file(f, "")
+        
+        # print add
+        print_to_screen_and_file(
+            f, " ADD AUC: {:.5f}".format(ori_add_results["add_auc"])
+        )
+        print_to_screen_and_file(
+            f,
+               " ADD  AUC threshold: {:.5f} m".format(ori_add_results["add_auc_thresh"]),
+        )
+        print_to_screen_and_file(
+            f, " ADD  Mean: {:.5f}".format(ori_add_results["add_mean"])
+        )
+        print_to_screen_and_file(
+            f, " ADD  Median: {:.5f}".format(ori_add_results["add_median"])
+        )
+        print_to_screen_and_file(
+            f, " ADD  Std Dev: {:.5f}".format(ori_add_results["add_std"]))
         print_to_screen_and_file(f, "")
         
         # print mAP
-        for thresh, avg_map in zip(thresholds, mAP_results):
+        for thresh, avg_map in zip(thresholds, ass_mAP_results):
             print_to_screen_and_file(
             f, " acc thresh: {:.5f} m".format(thresh)
             )
             print_to_screen_and_file(
             f, " acc: {:.5f} %".format(float(avg_map))
             )
-            mAP_dict[str(thresh)] = float(avg_map)
+            ass_mAP_dict[str(thresh)] = float(avg_map)
         print_to_screen_and_file(f, "")
+        
+        # print mAP
+        for thresh, avg_map in zip(thresholds, ori_mAP_results):
+            print_to_screen_and_file(
+            f, " acc thresh: {:.5f} m".format(thresh)
+            )
+            print_to_screen_and_file(
+            f, " acc: {:.5f} %".format(float(avg_map))
+            )
+            ori_mAP_dict[str(thresh)] = float(avg_map)
+        print_to_screen_and_file(f, "")        
         
         # print acc
         for thresh, avg_acc in zip(acc_thresholds, angles_results):
@@ -238,7 +282,7 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
             angles_dict[str(thresh)] = float(avg_acc)
         print_to_screen_and_file(f, "")
             
-    return add_results, mAP_dict, angles_dict
+    return ass_add_results, ass_mAP_dict, ori_add_results, ori_mAP_dict, angles_dict
                 
 
 
@@ -255,8 +299,9 @@ if __name__ == "__main__":
     
     optim_cfg = cfg["OPTIMIZER"]
     #optimizer = get_optimizer(model, optim_cfg["NAME"], optim_cfg["LR"], optim_cfg["WEIGHT_DECAY"])
-    epoch_id = 140
-    this_ckpt_path = f"/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/20/CHECKPOINT/model_{epoch_id}.pth"
+    epoch_id = cfg["EPOCH_ID"]
+    exp_id = cfg["EXP_ID"]
+    this_ckpt_path = f"/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/{exp_id}/CHECKPOINT/model_{str(epoch_id).zfill(3)}.pth"
     model, start_epoch = load_model(model, this_ckpt_path, optim_cfg["LR"])
     model = model.to(device)
     network_inference(model, cfg, epoch_id, device)

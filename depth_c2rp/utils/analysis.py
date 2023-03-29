@@ -45,7 +45,8 @@ def batch_mAP_from_pose(dt_joints_wrt_cam, gt_joints_wrt_cam, thresholds):
 def batch_acc_from_joint_angles(dt_joints_pos, gt_joints_pos, thresholds):
     # dt_joitns_pos, gt_joints_pos : B x 8 x 1
     this_acc = []
-    dist_angles = np.abs(dt_joints_pos, gt_joints_pos)[:, :-1, 0] # B x 8
+    #dist_angles = np.abs(dt_joints_pos,gt_joints_pos)[:, :-1, 0] # B x 8 Find the bug！
+    dist_angles = np.abs(dt_joints_pos - gt_joints_pos)[:, :-1, 0] # B x 8
     for thresh in thresholds:
         radian_thresh = math.radians(thresh)
         avg_acc = np.mean(dist_angles < radian_thresh) 

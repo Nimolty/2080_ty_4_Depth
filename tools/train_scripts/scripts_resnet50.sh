@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=4,5,6,7 python -m torch.distributed.launch --nproc_per_node=4 --master_port 29501 train.py --exp_id 22 --cfg /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_resnet50.yaml

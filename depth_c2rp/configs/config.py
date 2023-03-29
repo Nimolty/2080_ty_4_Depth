@@ -8,8 +8,9 @@ from tqdm import tqdm
 
 def update_config():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cfg', type=str, default="/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train.yaml", help='Configuration file to use')
+    parser.add_argument('--cfg', type=str, default="/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_resnet18.yaml", help='Configuration file to use')
     parser.add_argument('--exp_id', type=int, default=0, help="Record the Exp ID")
+    parser.add_argument('--epoch_id', type=int, default=0, help="Record the Epoch ID")
     parser.add_argument('--resume', action='store_true')
     parser.add_argument("--local_rank", default=os.getenv('LOCAL_RANK', -1), type=int)
     parser.add_argument("--dr_iter_num", type=int,default=0)
@@ -25,6 +26,7 @@ def update_config():
     cfg["RESUME"] = args.resume
     cfg["LOCAL_RANK"] = args.local_rank
     cfg["DR_ITER_NUM"] = args.dr_iter_num
+    cfg["EPOCH_ID"] = args.epoch_id
     
     return cfg, args
 
