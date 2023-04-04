@@ -18,6 +18,7 @@ from torch.nn import functional as F
 from torchvision.utils import make_grid
 from depth_c2rp.utils.utils import save_model, load_model, exists_or_mkdir, visualize_training_loss, find_seq_data_in_dir, load_camera_intrinsics
 from depth_c2rp.utils.utils import batch_quaternion_matrix, compute_concat_loss,exists_or_mkdir, get_K_crop_resize, update_translation, compute_rotation_matrix_from_ortho6d
+from depth_c2rp.utils.image_proc import get_nrm
 from depth_c2rp.utils.image_proc import batch_resize_masks_inference,depth_to_xyz
 from depth_c2rp.utils.analysis import add_from_pose, add_metrics, print_to_screen_and_file, batch_add_from_pose, batch_mAP_from_pose, batch_acc_from_joint_angles
 from depth_c2rp.datasets.datasets_o6d import Depth_dataset
@@ -77,19 +78,21 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
         with torch.no_grad():
             start_time = time.time()
             next_img = batch["next_frame_img_as_input"].to(device)
-            next_xy_wrt_cam, next_uv, next_simdepth, next_normals = batch["next_frame_xy_wrt_cam"].to(device), batch["next_frame_uv"].to(device), \
-            batch["next_frame_simdepth_as_input"].to(device), batch["next_normals_crop"].to(device)
-            next_input = torch.cat([next_img, next_simdepth, next_xy_wrt_cam, next_uv, next_normals], dim=1)
+            next_xy_wrt_cam, next_uv, next_simdepth = batch["next_frame_xy_wrt_cam"].to(device), batch["next_frame_uv"].to(device), \
+            batch["next_frame_simdepth_as_input"].to(device)
             next_whole_simdepth = batch["next_frame_whole_simdepth_as_input"].to(device)
-            
+            next_simdetph_all = batch["next_simdepth_all"].to(device)
             
             batch_gt_base_quaternion, batch_gt_base_trans, batch_gt_joints_wrt_cam, batch_gt_joints_wrt_rob = batch["next_frame_base_quaternion"].to(device), batch["next_frame_base_trans"].to(device), batch["next_frame_joints_wrt_cam"].to(device), batch["next_frame_joints_wrt_rob"].to(device) # N x k
+            batch_gt_K, batch_gt_boxes = batch["next_camera_K"].to(device), batch["next_bbox"].to(device)
             batch_gt_joints_pos = batch["next_frame_joints_pos"].to(device)
+            next_normals = get_nrm(next_simdetph_all, K[0][0], batch_gt_boxes[0], dataset_cfg["INPUT_RESOLUTION"])
             
             
+            next_input = torch.cat([next_img, next_simdepth, next_xy_wrt_cam, next_uv, next_normals], dim=1)
             batch_dt_mask, batch_dt_poses, batch_dt_joints_pos = model(next_input) 
             
-            batch_gt_K, batch_gt_boxes = batch["next_camera_K"].to(device), batch["next_bbox"].to(device)
+            
             batch_gt_crop_resize = cfg["DATASET"]["INPUT_RESOLUTION"]
             batch_new_gt_K = get_K_crop_resize(batch_gt_K, batch_gt_boxes, batch_gt_crop_resize)
             batch_t_init = torch.tensor([[0.0, 0.0, 1.0]]).to(device).repeat(batch_dt_mask.shape[0], 1)

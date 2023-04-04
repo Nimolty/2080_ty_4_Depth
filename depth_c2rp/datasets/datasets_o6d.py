@@ -21,7 +21,7 @@ class Depth_dataset(TorchDataset):
         mask_dict,
         camera_K=None,
         is_res=False,
-        device="cpu",
+        device=torch.device("cpu"),
         twonplus2=False,
         seq_frame=3,
         multi_frame=False,
@@ -126,11 +126,11 @@ class Depth_dataset(TorchDataset):
         # generate depth
         #prev_simdepth_np, prev_xy_wrt_cam, prev_uv, prev_normals_crop = crop_and_resize_simdepth(prev_frame_simdepth_path, self.input_resolution, uv=True, xy=True, nrm=True) # 1 x h x w
         if not self.is_res:
-            next_simdepth_np, next_xy_wrt_cam, next_uv, next_normals_crop = crop_and_resize_simdepth(next_frame_simdepth_path, \
-                                                                        self.input_resolution, uv=True, xy=True, nrm=True,device=self.device)
+            next_simdepth_np, next_xy_wrt_cam, next_uv, next_simdepth_all = crop_and_resize_simdepth(next_frame_simdepth_path, \
+                                                                        self.input_resolution, uv=True, xy=True, nrm=True)
         else:
-            next_simdepth_np, next_xy_wrt_cam, next_uv, next_normals_crop, next_xyz_rp = res_crop_and_resize_simdepth(next_frame_simdepth_path, \
-                                                                        self.input_resolution, uv=True, xy=True, nrm=True,device=self.device, camera_K=self.camera_K) 
+            next_simdepth_np, next_xy_wrt_cam, next_uv, next_simdepth_all, next_xyz_rp = res_crop_and_resize_simdepth(next_frame_simdepth_path, \
+                                                                        self.input_resolution, uv=True, xy=True, nrm=True,camera_K=self.camera_K) 
         simdepth_time = time.time()
 #        print("simdepth_time", simdepth_time - mask_time)
         
@@ -190,12 +190,12 @@ class Depth_dataset(TorchDataset):
             #prev_uv_tensor = None
             next_uv_tensor = None
         #if prev_normals_crop is not None and next_normals_crop is not None:
-        if next_normals_crop is not None:
+        if next_simdepth_all is not None:
             #prev_normals_crop_tensor = torch.from_numpy(prev_normals_crop).float()
-            next_normals_crop_tensor = torch.from_numpy(next_normals_crop).float()
+            next_simdepth_all_tensor = torch.from_numpy(next_simdepth_all).float()
         else:
             #prev_normals_crop_tensor = None
-            next_normals_crop_tensor = None
+            next_simdepth_all_tensor = None
         
         transform_time = time.time()
 #        print("transform_time", transform_time - simdepth_time)
@@ -228,7 +228,7 @@ class Depth_dataset(TorchDataset):
                   "next_frame_joints_wrt_rob" : next_joints_wrt_rob_tensor,
                   "next_frame_xy_wrt_cam" : next_xy_wrt_cam_tensor,
                   "next_frame_uv" : next_uv_tensor,
-                  "next_normals_crop" : next_normals_crop_tensor,
+                  "next_simdepth_all" : next_simdepth_all_tensor,
                   "next_camera_K" : self.camera_K_tensor,
                   "next_bbox" : next_bbox_tensor
                   }

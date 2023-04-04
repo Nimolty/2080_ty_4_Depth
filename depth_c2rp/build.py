@@ -13,7 +13,9 @@ from torch.nn.parallel._functions import Scatter, Gather
 
 
 head_names = {"FaPN": FaPNHead}
-backbone_names = {"ResNet" : ResNet, "ResT" : ResT, "ConvNeXt" : ConvNeXt, "PoolFormer" : PoolFormer}
+backbone_names = {"ResNet" : ResNet, "ResT" : ResT, "ConvNeXt" : ConvNeXt, "PoolFormer" : PoolFormer, 
+                  "stacked_hourglass" : HourglassNet, "hrnet" : HRNet, "dreamhourglass_resnet" : ResnetSimple, "dreamhourglass_vgg" : DreamHourglass
+                 }
 
 class build_network(nn.Module):
     def __init__(self, backbone, head, rot_type="quaternion"):
@@ -58,7 +60,44 @@ def build_model(backbone_all, head_name, model_classes, in_channels, num_joints,
     head = head_names[head_name](in_channels, num_joints, output_h, output_w, model_classes, rot_type=rot_type)
     return build_network(backbone, head, rot_type)
 
-
+def build_spdh_model(cfg):
+    network_name = cfg["MODEL"]["NAME"]
+    network_params = {}
+    
+    # init inchannels
+    if cfg["MODEL"]["INPUT_TYPE"] == "D":
+        inchannels = 1
+    elif cfg["MODEL"]["INPUT_TYPE"] == "XYZ":
+        inchannels = 3
+    elif cfg["MODEL"]["INPUT_TYPE"] == "RGB":
+        inchannels = 3
+    elif cfg["MODEL"]["INPUT_TYPE"] == "RGBD":
+        inchannels = 4
+    else:
+        raise ValueError
+    
+    if network_name == "stacked_hourglass":
+        network_params["inchannels"] = inchannels
+        network_params["num_stacks"] = cfg["MODEL"]["STACKS"]
+        network_params["num_blocks"] = cfg["MODEL"]["BLOCKS"]
+        network_params["num_joints"] = cfg["DATASET"]["NUM_JOINTS"]
+       
+    elif network_name == "hrnet":
+        network_params["inchannels"] = inchannels
+        network_params["c"] = cfg["MODEL"]["CONV_WIDTH"]
+        network_params["num_joints"] = cfg["DATASET"]["NUM_JOINTS"]
+        network_params["bn_momentum"] = 0.1
+        
+    elif "dreamhourglass_resnet" in network_name:
+        network_params["n_keypoints"] = cfg["DATASET"]["NUM_JOINTS"]
+        network_params["full"] = cfg["MODEL"]["FULL"]
+    
+    else:
+        raise ValueError
+    
+    model = backbone_names[network_name](**network_params)
+    return model
+        
 
 
 def scatter(inputs, target_gpus, dim=0, chunk_sizes=None):

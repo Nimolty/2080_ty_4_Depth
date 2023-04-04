@@ -187,7 +187,17 @@ class DiffPFDepthRenderer():
         index = random.sample(range(N), num_pts)
         return self.vertices[:, index, :]
         #print("self.vertices.shape", self.vertices.shape)
-    
+        
+    def get_sample_index(self, num_pts):
+        _, N, _ = self.single_ori_vertices.shape 
+        index = random.sample(range(N), num_pts)
+        return index
+        
+    def get_sample_meshes(self, joints_pos, index):
+        self.joints_pos = joints_pos
+        self.vertices_list_, self.joints_x3d_rob, self.R2C_list, self.T_list = concat_part_mesh(self.vertices_list, self.joints_pos, self.device,True)
+        self.vertices = torch.cat(self.vertices_list_,dim=1)
+        return self.vertices[:, index, :]
 
 if __name__ == "__main__":
     cfg = dict()

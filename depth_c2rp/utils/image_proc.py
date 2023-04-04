@@ -192,7 +192,18 @@ def res_crop_and_resize_simdepth(simdepth_path, input_resolution, uv=False, xy=F
         
     return simdepth_crop_res, xy_wrt_cam_res, uv_res, normals_crop, xyz_rp
 
-def crop_and_resize_simdepth(simdepth_path, input_resolution, uv=False, xy=False, nrm=False, device="cpu", \
+def get_nrm(simdepth_tensor, f, bbox, input_wh):
+    # simdepth_tensor : B x 1 x H x W
+    # input_wh : (W, H)
+    # [crop_w, crop_h, img_ori_w-crop_w, img_ori_h-crop_h]
+    transform = transforms.Compose([transforms.Resize(size=(input_wh[0], input_wh[1]),interpolation=transforms.InterpolationMode.NEAREST)])
+    surface_normal, _, _ = get_surface_normal(simdepth_tensor, f, scale_h=1.0, scale_w=1.0)
+    #print((bbox[1]))
+    surface_normal_crop = surface_normal[:, :, int(bbox[1]) : int(bbox[3]), int(bbox[0]) : int(bbox[2])]
+    surface_normal_crop = transform(surface_normal_crop) # B x 3 x H x W
+    return surface_normal_crop
+
+def crop_and_resize_simdepth(simdepth_path, input_resolution, uv=False, xy=False, nrm=False, \
                               f=502.30,threshold_dist=[0.01, 7.00], threshold_vs=[-0.1, 7.00]):
     start_time = time.time()              
     input_h, input_w = input_resolution
@@ -228,16 +239,16 @@ def crop_and_resize_simdepth(simdepth_path, input_resolution, uv=False, xy=False
     xy_time = time.time()
     #print("xy_time", xy_time - crop_time)
     
-    if nrm:
-        assert xy_wrt_cam is not None
-
-        simdepth_tensor = torch.from_numpy(simdepth_file[:, :, 0][None, None, :, : ]).to(device) #Bx1XHXW
-        surface_normal, _, _ = get_surface_normal(simdepth_tensor, f, scale_h=1.0, scale_w=1.0)
-        normals = surface_normal.cpu().numpy()[0].transpose(1, 2, 0)
-        normals_crop = normals[crop_h:img_ori_h-crop_h, crop_w:img_ori_w-crop_w, :]
-        normals_crop = cv2.resize(normals_crop, (input_w, input_h), interpolation=cv2.INTER_NEAREST).transpose(2, 0, 1)
-    else:
-        normals_crop = None
+#    if nrm:
+#        assert xy_wrt_cam is not None
+#
+#        simdepth_tensor = torch.from_numpy(simdepth_file[:, :, 0][None, None, :, : ]).to(device) #Bx1XHXW
+#        surface_normal, _, _ = get_surface_normal(simdepth_tensor, f, scale_h=1.0, scale_w=1.0)
+#        normals = surface_normal.cpu().numpy()[0].transpose(1, 2, 0)
+#        normals_crop = normals[crop_h:img_ori_h-crop_h, crop_w:img_ori_w-crop_w, :]
+#        normals_crop = cv2.resize(normals_crop, (input_w, input_h), interpolation=cv2.INTER_NEAREST).transpose(2, 0, 1)
+#    else:
+#        normals_crop = None
     
     nrm_time = time.time()
     #print("nrm_time", nrm_time - xy_time)
@@ -258,7 +269,7 @@ def crop_and_resize_simdepth(simdepth_path, input_resolution, uv=False, xy=False
     uv_time = time.time()
     #print("uv_time", uv_time- nrm_time)
         
-    return simdepth_crop, xy_wrt_cam, uv, normals_crop
+    return simdepth_crop, xy_wrt_cam, uv, simdepth_file[:, :, 0][None, :, : ]
 
 
 def crop_and_resize_mask(mask_path, input_resolution, mask_dict, num_classes):

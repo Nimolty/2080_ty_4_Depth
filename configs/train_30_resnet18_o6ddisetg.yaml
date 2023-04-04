@@ -32,12 +32,12 @@ DATASET:
 
 TRAIN:
   IMAGE_SIZE    : [360, 640]      # training image size in (h, w)
-  BATCH_SIZE    : 11             # batch size used to train
-  EPOCHS        : 500             # number of epochs to train
+  BATCH_SIZE    : 12            # batch size used to train
+  EPOCHS        : 100             # number of epochs to train
   EVAL_INTERVAL : 10              # evaluation interval during training
   AMP           : false           # use AMP in training
   DDP           : false           # use DDP training
-  NUM_WORKERS   : 4
+  NUM_WORKERS   : 8
 
 DR:
   ENGINE          : Kaolin
@@ -76,8 +76,8 @@ EVAL:
     ENABLE      : false                               # multi-scale and flip evaluation  
     FLIP        : true                                # use flip in evaluation  
     SCALES      : [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]   # scales used in MSF evaluation         
-  BATCH_SIZE    : 12  
-  NUM_WORKERS   : 2   
+  BATCH_SIZE    : 50  
+  NUM_WORKERS   : 4   
 
 
 TEST:
