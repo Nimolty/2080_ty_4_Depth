@@ -24,7 +24,7 @@ DATASET:
   JOINT_INFOS   : {"panda_joint1" : {"index" : 2, "direction" : 1, "base" : 0, "offset" : [0.0, 0.0, 0.14]}, "panda_joint2" : {"index" : 1, "direction" : 1, "base" : 1, "offset" : [0.0, 0.0, 0.0]}, "panda_joint3" : {"index" : 1, "direction" : -1, "base" : 3, "offset" : [0.0, 0.0, -0.1210]}, "panda_joint4" : {"index" : 1, "direction" : -1, "base" : 4, "offset" : [0.0, 0.0, 0.0]}, "panda_joint5" : {"index" : 1, "direction" : 1, "base" : 5, "offset" : [0.0, 0.0, -0.2590]}, "panda_joint6" : {"index" : 1, "direction" : -1, "base" :5, "offset" : [0.0, 0.0158, 0.0]}, "panda_joint7" : {"index" : 1, "direction" : -1, "base" : 7, "offset" : [0.0, 0.0, 0.0520]}, "panda_finger_joint1" : {"base" : 8, "offset" : [0.0, 0.0, 0.0584]}}
   MASK_DICT     : { "Link0": 0.0039215688, "Link1": 0.0078431377, "Link2": 0.0117647061, "Link3": 0.0156862754, "Link4": 0.0196078438, "Link5": 0.0235294122, "Link6": 0.0274509806, "Link7": 0.0313725508, "panda_hand" : 0.0352941192,"panda_finger_joint1" : 0.0392156876,"panda_finger_joint2" : 0.0431372560}
   TYPE          : D
-  NUM_JOINTS    : 42 # num_joints x 2
+  NUM_JOINTS    : 48 # num_joints x 2
   INPUT_RESOLUTION : [384, 216] # W x H
   RAW_RESOLUTION : [640, 360] # W x H
   NORM_TYPE     : min_max
@@ -37,8 +37,8 @@ DATASET:
   AUG_TYPE      : 3d  
 
 TRAIN:
-  BATCH_SIZE    : 5            # batch size used to train
-  EPOCHS        : 30             # number of epochs to train
+  BATCH_SIZE    : 12            # batch size used to train
+  EPOCHS        : 200             # number of epochs to train
   EVAL_INTERVAL : 10              # evaluation interval during training
   AMP           : false           # use AMP in training
   DDP           : false           # use DDP training
@@ -67,7 +67,7 @@ OPTIMIZER:
   TYPE          : Adam          # optimizer name
   LR            : 0.001           # initial learning rate used in optimizer
   WEIGHT_DECAY  : 0.01            # decay rate used in optimizer 
-  DECAY_STEPS   : [15,24]
+  DECAY_STEPS   : [150]
 
 SCHEDULER:
   NAME          : warmuppolylr    # scheduler name

@@ -7,6 +7,7 @@ import imgaug as ia
 import imgaug.augmenters as iaa
 import numpy as np
 import torch
+import time
 from torch.utils.data import Dataset
 from tqdm import tqdm
 import os
@@ -24,7 +25,7 @@ os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"
 #from utils.preprocessing import apply_depth_normalization_16bit_image
 #from utils.utils import heatmap_from_kpoints_array, gkern
 from depth_c2rp.utils.spdh_utils import augment_3d, depthmap2pointcloud, depthmap2points, overlay_points_on_image, mosaic_images
-from depth_c2rp.utils.spdh_utils import apply_depth_normalization_16bit_image, heatmap_from_kpoints_array, gkern
+from depth_c2rp.utils.spdh_utils import apply_depth_normalization_16bit_image, heatmap_from_kpoints_array, gkern, compute_rigid_transform
 
 #JOINTS_NAMES = [
 #    'head',
@@ -80,7 +81,7 @@ class Depth_dataset(Dataset):
                  raw_img_size: tuple = (640, 360), input_img_size: tuple = (384, 216), sigma: int = 4., norm_type: str = 'mean_std',
                  network_input: str = 'D', network_output: str = 'H', network_task: str = '3d_RPE',
                  depth_range: tuple = (500, 3380, 15), depth_range_type: str = 'normal', aug_type: str = '3d',
-                 aug_mode: bool = True, noise: bool = False, demo: bool = False):
+                 aug_mode: bool = True, noise: bool = False, demo: bool = False, load_mask: bool = False, mask_dict : dict = {}, unnorm_depth: bool=False):
         """Load Baxter robot synthetic dataset
 
         Parameters
@@ -140,16 +141,24 @@ class Depth_dataset(Dataset):
         self.aug_mode = aug_mode
         self.noise = noise
         self.demo = demo
+        self.load_mask = load_mask
+        self.mask_dict = mask_dict
+        self.unnorm_depth = unnorm_depth
         self.data = self.load_data()
 
     def __len__(self):
         return len(self.data[self.mode])
 
     def __getitem__(self, idx):    
+        t1 = time.time()
         sample = self.data[self.mode][idx].copy()
         # image loading (depth and/or RGB)
         depth_img = cv2.imread(sample['depth_file'], cv2.IMREAD_UNCHANGED)[:, :, 0].astype(np.float32) * 1000 # milimeters 
         depth_img = cv2.resize(depth_img, tuple(self.input_img_size), interpolation=cv2.INTER_NEAREST)
+        
+        depth_pf_img = cv2.imread(sample['depth_pf_file'], cv2.IMREAD_UNCHANGED)[:, :, 0].astype(np.float32) * 1000 # milimeters 
+        depth_pf_img = cv2.resize(depth_pf_img, tuple(self.input_img_size), interpolation=cv2.INTER_NEAREST)
+        
         H, W = depth_img.shape
         assert H == self.input_img_size[1]
         assert W == self.input_img_size[0]
@@ -158,6 +167,18 @@ class Depth_dataset(Dataset):
         
         # image size divided by 32 should be an even value (for SH network)
         depth_img = depth_img[12:-12, :] # 192 * 384
+        depth_pf_img = depth_pf_img[12:-12, :]
+        if self.load_mask:
+            mask_file = cv2.imread(sample["mask_file"], cv2.IMREAD_UNCHANGED)[:, :, 2]
+            mask_file_res = np.zeros_like(mask_file)
+            assert self.mask_dict != {}
+            for idx, (key, value) in enumerate(self.mask_dict.items()):
+                mask_file_res[np.where(mask_file == value)] = idx+1
+            
+            #mask_file_res[np.where(mask_file != 1)] = 1
+            mask_file_res = cv2.resize(mask_file_res[:, :, None], (W, H), interpolation=cv2.INTER_NEAREST)
+            mask_file_res = mask_file_res[12:-12, :][:, :, None]
+            #print(mask_file_res.shape)
         
         # adapt depth image to "padding" depth range type
         if self.depth_range_type == 'padding':
@@ -165,6 +186,12 @@ class Depth_dataset(Dataset):
             new_img_h = (Z_max - Z_min) // dZ
             padding = int(np.abs(depth_img.shape[0] - new_img_h) // 2)
             depth_img = cv2.copyMakeBorder(depth_img, padding, padding, 0, 0, cv2.BORDER_CONSTANT, 0)
+            depth_pf_img = cv2.copyMakeBorder(depth_pf_img, padding, padding, 0, 0, cv2.BORDER_CONSTANT, 0)
+        
+        # copy unnormed depth img
+        if self.unnorm_depth:
+            depth_img_unnorm = depth_img.copy() / 1000
+            depth_pf_img_unnorm = depth_pf_img.copy() / 1000
         
         # initialize intrinsic matrix
         cam_settings_data = json.load(open(str(self.train_dataset_dir / "_camera_settings.json"), 'r'))
@@ -175,7 +202,9 @@ class Depth_dataset(Dataset):
             [0, fy, cy],
             [0, 0, 1],
         ])
-
+        
+        t2 = time.time()
+        
         joints_2D = np.zeros((sample['joints'].shape[0], 2))
         joints_3D_Z = np.zeros((sample['joints'].shape[0], 3))
         #print("sample_joints_3d", sample["joints"]) 
@@ -189,7 +218,11 @@ class Depth_dataset(Dataset):
             u = u / w
             v = v / w
             joints_2D[n] = [u, v]
-
+        joints_3D_Z_copy = joints_3D_Z.copy()
+        # load R2C Mat and Trans
+        R2C_Mat_before_aug = np.array(sample["R2C_Mat"]) # 3 x 3
+        R2C_Trans_before_aug = np.array(sample["R2C_Trans"]) # 3
+        
         # apply 2d or 3d augmentation
         if self.aug_mode:
             if self.aug_type == '2d':
@@ -217,7 +250,7 @@ class Depth_dataset(Dataset):
                 points = depthmap2pointcloud(depth_img / 1000, fx=fx, fy=fy, cx=intrinsic[0, 2],
                                              cy=intrinsic[1, 2])
                 points = points[points[:, 2] != 0]
-                depth_img, joints_3D_Z = augment_3d(intrinsic, points, depth_img, joints_3D_Z)
+                depth_img, joints_3D_Z, R2C_Mat_after_aug, R2C_Trans_after_aug = augment_3d(intrinsic, points, depth_img, joints_3D_Z, R2C_Mat_before_aug, R2C_Trans_before_aug)
                 depth_img = depth_img * 1000
                 if self.noise:
                     seq = iaa.Sequential([
@@ -228,11 +261,25 @@ class Depth_dataset(Dataset):
                 #point3d[..., 1] *= -1  # I dont' known whether to invert Y axis direction for 2D reprojection
                 joints_2D = (intrinsic @ point3d[..., None]).squeeze(-1)
                 joints_2D = (joints_2D / joints_2D[:, -1:])[:, :2]
-
+        else:
+            R2C_Mat_after_aug = R2C_Mat_before_aug
+            R2C_Trans_after_aug = R2C_Trans_before_aug
         # create visible depth map
         depth_img_vis = ((depth_img * 255) / depth_img.max()).astype(np.uint8)[..., None]
         depth_img_vis = np.concatenate([depth_img_vis, depth_img_vis, depth_img_vis], -1)
-
+        
+        R2C_Pose_after_aug = np.eye(4, 4)
+        R2C_Pose_after_aug[:3, :3] = R2C_Mat_after_aug
+        R2C_Pose_after_aug[:3, 3] = R2C_Trans_after_aug 
+        t3 = time.time()
+#        joints_1d_gt = torch.from_numpy(np.array(sample["joints_8"]))[None, :, None].float()
+#        joints_3D_Z_rob = compute_3n_loss(joints_1d_gt)
+#        print("ours_computed_rot", R2C_Mat_after_aug)
+#        print("ours_computed_trans", R2C_Trans_after_aug)
+#        
+#        KO_pose = compute_rigid_transform(joints_3D_Z_rob.float(), torch.from_numpy(joints_3D_Z_copy)[None, :, :].float())
+#        print("KO_pose", KO_pose)
+        
         '''
         DEBUG = False
         if DEBUG:
@@ -274,14 +321,8 @@ class Depth_dataset(Dataset):
         depth_coords = np.array(depth_coords)
         z = z_values[depth_coords[:, 1].astype(int), depth_coords[:, 0].astype(int)]
         joints_3D_depth *= z[..., None]
-#        if self.aug_type == '2d':
-#            joints_3D_Z_ = np.ones((joints_2D.shape[0], 3), dtype=np.float32)
-#            joints_3D_Z_[:, :2] = XY_rw
-#            z = joints_3D_Z[:, -1:]
-#            joints_3D_Z_ *= z
-#            joints_3D_Z = joints_3D_Z_
-#            joints_3D_Z[..., 1] *= -1
-
+        
+        t4 = time.time()
         # compute XYZ image
         if "XYZ" in self.network_input:
             xyz_img = depthmap2points(depth_img / 1000, fx=fx, fy=fy, cx=intrinsic[0, 2], cy=intrinsic[1, 2])
@@ -338,7 +379,14 @@ class Depth_dataset(Dataset):
 
         # mean and std for 2D and 3D joints
         #stats = np.atleast_1d(np.load(str(self.dataset_dir / "mean_std_stats.npy"), allow_pickle=True))[0]
-
+        #print(joints_3D_Z.cuda())
+        
+        t5 = time.time()
+#        print("t5 - t4", t5 -t4)
+#        print("t4 - t3", t4 -t3)
+#        print("t3 - t2", t3 -t2)
+#        print("t2 - t1", t2 -t1)
+        
         output = {
             'depth': torch.from_numpy(depth_img[None, ...]),
             'depthvis': depth_img_vis,
@@ -346,7 +394,11 @@ class Depth_dataset(Dataset):
             'K_depth': intrinsic,
             'joints_2D_depth': joints_2D,
             'joints_3D_Z': joints_3D_Z,
-            "rgb_path" : sample['rgb_file']
+            "joints_3D_kps" : torch.from_numpy(np.array(sample["joints_kps"]))[[0,2,3,4,6,7,8]],
+            "rgb_path" : sample['rgb_file'],
+            "joints_7" : torch.from_numpy(np.array(sample["joints_8"])[:7]).float(),
+            "R2C_Pose" : R2C_Pose_after_aug[:3, :]#torch.from_numpy(R2C_Pose_after_aug)[:3, :].float(), 
+            
         }
         if self.network_task == '2d_RPE':
             output['joints_3D_depth'] = joints_3D_depth
@@ -357,6 +409,11 @@ class Depth_dataset(Dataset):
             output['heatmap_25d'] = torch.from_numpy(heatmaps_25d.astype(np.float32))
         if "XYZ" in self.network_input:
             output['xyz_img'] = torch.from_numpy(xyz_img.transpose(2, 0, 1))
+        if self.load_mask:
+            output["mask"] = torch.from_numpy(mask_file_res).float()
+        if self.unnorm_depth:
+            output["unnorm_depth"] = torch.from_numpy(depth_img_unnorm[None, ...]).float()
+            output["unnorm_pf_depth"] = torch.from_numpy(depth_pf_img_unnorm[None, ...]).float()
 
         return output
 
@@ -399,21 +456,32 @@ class Depth_dataset(Dataset):
                 
                 # Here the dataset requires depth 8 and depth 16, so how to do that?
                 depth_file = rgb_file.replace('color.png', 'simDepthImage.exr')
+                depth_pf_file = rgb_file.replace("color.png", "depth_60.exr")
                 joints_file = rgb_file.replace('color.png', 'meta.json')
+                mask_file = rgb_file.replace("color.png", "mask.exr")
                 with open(joints_file, 'r') as fd:
                     json_data = json.load(fd)[0]
                 json_keypoints_data = json_data["keypoints"]
                 #json_joints_data = json_data["joints"]
-                json_joints_data = json_data["joints_3n"]
+                #json_joints_data = json_data["joints_3n_fixed_40"]
                 
-                keypoints_r2c_data = [json_keypoints_data[idx]["R2C_mat"] for idx in range(len(json_keypoints_data))]
+                json_joints_data = json_data["joints_3n_fixed_42"]
+                
+                json_joints_8_data = json_data["joints"]
+                joints_8_pos = [kp["position"] for idx, kp in enumerate(json_joints_8_data)] 
+                json_keypoints_pos = [kp["location_wrt_cam"] for idx, kp in enumerate(json_keypoints_data)][:-2]
+                
+                R2C_Mat = json_keypoints_data[0]["R2C_mat"]
+                R2C_Trans = json_keypoints_data[0]["location_wrt_cam"]
                 joints_loc_wrt_cam_data = [json_joints_data[idx]["location_wrt_cam"] for idx in range(len(json_joints_data))]
+                
+                #joints_loc_wrt_cam_data.append(json_keypoints_data[-1]["location_wrt_cam"])
+                assert len(self.JOINT_NAMES) == len(joints_loc_wrt_cam_data)
+                
+                
+                
                 joints_pos = np.zeros((len(self.JOINT_NAMES), 3), dtype=np.float32)
                 for idx, k in enumerate(self.JOINT_NAMES):
-#                    joint_info = JOINT_INFOS[k]
-#                    kp_id = joint_info["base"]
-#                    r2c_mat = keypoints_r2c_data[kp_id]
-#                    r2c_mat_np = np.asarray(r2c_mat)
                     loc_wrt_cam = joints_loc_wrt_cam_data[idx]
 #                    q = Quaternion(matrix=r2c_mat_np)
                     joints_pos[idx] = [loc_wrt_cam[0], 
@@ -429,7 +497,13 @@ class Depth_dataset(Dataset):
                 sample = {
                         'rgb_file': rgb_file,
                         "depth_file" : depth_file, # mm
+                        "depth_pf_file" : depth_pf_file,
+                        "mask_file"  : mask_file,
                         'joints': joints_pos,             # [tx, ty, tz, qw, qx, qy, qz]
+                        "joints_8" : joints_8_pos, 
+                        "joints_kps" : json_keypoints_pos,
+                        "R2C_Mat" :  R2C_Mat,
+                        "R2C_Trans" : R2C_Trans
                     }
 
                 data[split].append(sample)

@@ -1,1 +1,1 @@
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python -m torch.distributed.launch --nproc_per_node=8 --master_port 20320 /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/tools/train_spdh.py --exp_id 36 --cfg "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_36_spdh_hg2.yaml"
+CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 --master_port 20320 /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/tools/train_spdh.py --exp_id 37 --cfg "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_36_spdh_hg2.yaml"

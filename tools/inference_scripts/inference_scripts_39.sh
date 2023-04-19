@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=1,2,3,4 python -m torch.distributed.launch --nproc_per_node=4 /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/tools/inference_spdh_multi.py --exp_id 39 --epoch_id 5 --cfg "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_39_spdh_resnet_h.yaml"  --model_path "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/39/CHECKPOINT/model.pth"  

@@ -1,0 +1,97 @@
+DEVICE          : cuda              # device used for training and evaluation (cpu, cuda, cuda0, cuda1, ...)
+SAVE_DIR        : "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/"        # output folder name used for saving the model, logs and inference results
+
+MODEL:                                                                          
+  SEED          : 317
+  NAME          : dreamhourglass_resnet_h                                # name of the model you are using
+  TASK          : 3d_RPE
+  INPUT_TYPE    : XYZ
+  OUTPUT_TYPE   : 2.5dH
+  FULL          : false
+
+DATASET:
+  NAME          : HELEN                                               # dataset name to be trained with (camvid, cityscapes, ade20k)
+  TRAINING_ROOT : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn/"     
+  VAL_ROOT      : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"   # dataset root path
+  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
+  #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Small_Testing_Data_0115/"  
+  #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Test_Data_0115/"  
+  #TESTING ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
+  MANIPULATOR   : Franka_Emika_Panda
+  KEYPOINT_NAMES : ["Link0", "Link1", "Link2", "Link3", "Link4", "Link5", "Link6", "Link7", "panda_hand", "panda_finger_joint1", "panda_finger_joint2"]
+  JOINT_NAMES   : ["panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4", "panda_joint5", "panda_joint6", "panda_joint7", "panda_finger_joint1"]
+  JOINT_INFOS   : {"panda_joint1" : {"index" : 2, "direction" : 1, "base" : 0, "offset" : [0.0, 0.0, 0.14]}, "panda_joint2" : {"index" : 1, "direction" : 1, "base" : 1, "offset" : [0.0, 0.0, 0.0]}, "panda_joint3" : {"index" : 1, "direction" : -1, "base" : 3, "offset" : [0.0, 0.0, -0.1210]}, "panda_joint4" : {"index" : 1, "direction" : -1, "base" : 4, "offset" : [0.0, 0.0, 0.0]}, "panda_joint5" : {"index" : 1, "direction" : 1, "base" : 5, "offset" : [0.0, 0.0, -0.2590]}, "panda_joint6" : {"index" : 1, "direction" : -1, "base" :5, "offset" : [0.0, 0.0158, 0.0]}, "panda_joint7" : {"index" : 1, "direction" : -1, "base" : 7, "offset" : [0.0, 0.0, 0.0520]}, "panda_finger_joint1" : {"base" : 8, "offset" : [0.0, 0.0, 0.0584]}}
+  MASK_DICT     : { "Link0": 0.0039215688, "Link1": 0.0078431377, "Link2": 0.0117647061, "Link3": 0.0156862754, "Link4": 0.0196078438, "Link5": 0.0235294122, "Link6": 0.0274509806, "Link7": 0.0313725508, "panda_hand" : 0.0352941192,"panda_finger_joint1" : 0.0392156876,"panda_finger_joint2" : 0.0431372560}
+  TYPE          : D
+  NUM_JOINTS    : 48 # num_joints x 2
+  INPUT_RESOLUTION : [384, 216] # W x H
+  RAW_RESOLUTION : [640, 360] # W x H
+  NORM_TYPE     : min_max
+  REF_FRAME     : left_hand
+  DEPTH_RANGE   : [500, 3380, 7.5]
+  DEPTH_RANGE_TYPE : padding
+  SURROUNDING_REMOVALS : false
+  SIGMA         : 3.0
+  AUG           : true
+  AUG_TYPE      : 3d  
+
+TRAIN:
+  BATCH_SIZE    : 2            # batch size used to train
+  EPOCHS        : 100             # number of epochs to train
+  EVAL_INTERVAL : 10              # evaluation interval during training
+  AMP           : false           # use AMP in training
+  DDP           : false           # use DDP training
+  NUM_WORKERS   : 6
+
+DR:
+  ENGINE          : Kaolin
+  CAD_MODEL_PATHS : [../materials/franka_panda/Link0.obj, ../materials/franka_panda/Link1.obj, ../materials/franka_panda/Link2.obj,
+                     ../materials/franka_panda/Link3.obj, ../materials/franka_panda/Link4.obj, ../materials/franka_panda/Link5.obj,
+                     ../materials/franka_panda/Link6.obj, ../materials/franka_panda/Link7.obj, ../materials/franka_panda/panda_hand.obj,
+                     ../materials/franka_panda/panda_finger_joint1.obj, ../materials/franka_panda/panda_finger_joint2.obj
+                    ] 
+  RT_LR           : 0.001
+  GA_LR           : 0.005
+  NUM_OF_SAMPLE_PTS : 3000
+
+LOSS:
+  NAME          : CrossEntropy          # loss function name (OhemCrossEntropy, CrossEntropy, Dice)
+  CLS_WEIGHTS   : false            # use class weights in loss calculation
+  IGNORE_LABELS : 255
+  HM_WEIGHTS    : 100.0
+  ANGLE_WEIGHTS : 0.01
+  POSE_WEIGHTS  : 0.0
+  RT_LOSS_TYPE  : disentangle
+  THREE_D_LOSS_TYPE : many # many # edm
+  
+OPTIMIZER:
+  TYPE          : Adam          # optimizer name
+  LR            : 0.001           # initial learning rate used in optimizer
+  B_LR          : 0.000001 # 0.0000001
+  A_LR         : 0.001
+  WEIGHT_DECAY  : 0.01            # decay rate used in optimizer 
+  DECAY_STEPS   : [30,60]
+
+SCHEDULER:
+  NAME          : warmuppolylr    # scheduler name
+  POWER         : 0.9             # scheduler power
+  WARMUP        : 5               # warmup epochs used in scheduler
+  WARMUP_RATIO  : 0.1             # warmup ratio
+  
+
+EVAL:
+  MODEL_PATH    : 'output/DDRNet_DDRNet-23slim_HELEN_61_11.pth'    # trained model file path
+  IMAGE_SIZE    : [512, 512]                          # evaluation image size in (h, w)                       
+  MSF: 
+    ENABLE      : false                               # multi-scale and flip evaluation  
+    FLIP        : true                                # use flip in evaluation  
+    SCALES      : [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]   # scales used in MSF evaluation         
+  BATCH_SIZE    : 4  
+  NUM_WORKERS   : 4   
+
+
+TEST:
+  MODEL_PATH    : 'output/DDRNet_DDRNet-23slim_HELEN_61_11.pth'    # trained model file path
+  FILE          : 'assests/faces'                    # filename or foldername 
+  IMAGE_SIZE    : [512, 512]                          # inference image size in (h, w)
+  OVERLAY       : true                                # save the overlay result (image_alpha+label_alpha)

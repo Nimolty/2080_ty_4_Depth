@@ -163,9 +163,7 @@ class HourglassNet(nn.Module):
                 score_ = self.score_[i](score)
                 x = x + fc_ + score_
 
-        return {
-            'heatmaps': heatmaps
-        }
+        return heatmaps
 
 
 if __name__ == '__main__':

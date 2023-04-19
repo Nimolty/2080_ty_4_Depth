@@ -153,8 +153,8 @@ class Depth_dataset(Dataset):
         for n, joint in enumerate(sample["joints"]):
             point3d = np.asarray([joint[0], joint[1], joint[2]]) # right handed reference frame
             joints_3D_Z[n] = point3d.copy()
-            
-        output = {'joints_3D_Z': joints_3D_Z,}
+        
+        output = {'joints_3D_Z': joints_3D_Z, "joints_7" : np.array(sample["joints_7"])}
         return output
 
     def train(self):
@@ -201,10 +201,20 @@ class Depth_dataset(Dataset):
                     json_data = json.load(fd)[0]
                 json_keypoints_data = json_data["keypoints"]
                 #json_joints_data = json_data["joints"]
-                json_joints_data = json_data["joints_3n"]
+                json_joints_data = json_data["joints_3n_fixed"]
+                json_joints_7_data = json_data["joints"]
+                joints_7_pos = [kp["position"] for idx, kp in enumerate(json_joints_7_data) if idx != len(json_joints_7_data)-1] 
                 
                 keypoints_r2c_data = [json_keypoints_data[idx]["R2C_mat"] for idx in range(len(json_keypoints_data))]
                 joints_loc_wrt_cam_data = [json_joints_data[idx]["location_wrt_cam"] for idx in range(len(json_joints_data))]
+                assert len(self.JOINT_NAMES) == len(joints_loc_wrt_cam_data)
+                #print("length of joints kps", len(joints_loc_wrt_cam_data))
+                
+#                assert "panda_finger_joint2" == json_keypoints_data[-1]["Name"]
+#                last_wrt_cam = json_keypoints_data[-1]["location_wrt_cam"]
+#                joints_loc_wrt_cam_data.append(last_wrt_cam)
+#                assert len(self.JOINT_NAMES) == len(joints_loc_wrt_cam_data)
+                
                 joints_pos = np.zeros((len(self.JOINT_NAMES), 3), dtype=np.float32)
                 for idx, k in enumerate(self.JOINT_NAMES):
 #                    joint_info = JOINT_INFOS[k]
@@ -216,17 +226,15 @@ class Depth_dataset(Dataset):
                     joints_pos[idx] = [loc_wrt_cam[0], 
                                        loc_wrt_cam[1],
                                        loc_wrt_cam[2],] 
-#                                       q.x,
-#                                       q.y,
-#                                       q.z,
-#                                       q.w]
+
 
                 iter += 1
 
                 sample = {
                         'rgb_file': rgb_file,
                         "depth_file" : depth_file, # mm
-                        'joints': joints_pos,             # [tx, ty, tz, qw, qx, qy, qz]
+                        'joints': joints_pos, 
+                        "joints_7" : joints_7_pos            # [tx, ty, tz, qw, qx, qy, qz]
                     }
 
                 data[split].append(sample)

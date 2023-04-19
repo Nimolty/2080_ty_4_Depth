@@ -13,6 +13,20 @@ class MLP(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return self.fc2(F.gelu(self.fc1(x)))
+        
+class MLP_TOY(nn.Module):
+    def __init__(self, dim, h1_dim, out_dim) -> None:
+        super().__init__()
+        out_dim = out_dim or dim
+        h2_dim = h1_dim // 2
+        h3_dim = h2_dim // 4
+        self.fc1 = nn.Linear(dim, h1_dim)
+        self.fc2 = nn.Linear(h1_dim, h2_dim)
+        self.fc3 = nn.Linear(h2_dim, h3_dim)
+        self.fc4 = nn.Linear(h3_dim, out_dim)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.fc4(F.gelu(self.fc3(F.gelu(self.fc2(F.gelu(self.fc1(x)))))))
 
 
 class Attention(nn.Module):

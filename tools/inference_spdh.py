@@ -15,7 +15,7 @@ import os
 # spdh
 from depth_c2rp.DifferentiableRenderer.Kaolin.Renderer import DiffPFDepthRenderer
 from depth_c2rp.datasets.datasets_spdh import Depth_dataset
-from depth_c2rp.build import build_spdh_model
+from depth_c2rp.build import build_whole_spdh_model
 from depth_c2rp.utils.spdh_utils import load_spdh_model
 from depth_c2rp.spdh_optimizers import init_optimizer
 from depth_c2rp.utils.analysis import add_from_pose, add_metrics, print_to_screen_and_file, batch_add_from_pose, batch_mAP_from_pose, batch_acc_from_joint_angles
@@ -83,6 +83,7 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
 #            if batch_idx >= 3:
 #                break
             joints_3d_gt = batch['joints_3D_Z'].to(device).float()
+            joints_1d_gt = batch["joints_7"].to(device).float()
             heatmap_gt = batch['heatmap_25d'].to(device).float()
             input_K = batch['K_depth'].to(device).float()
             input_fx = batch['K_depth'].to(device).float()[:, 0, 0]
@@ -93,15 +94,11 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
             else:
                 raise ValueError
             
-            outputs = model(input_tensor)
+            
             b, c, h, w = heatmap_gt.size()
             
-            if model_cfg["NAME"] == "stacked_hourglass":
-                heatmap_pred = outputs['heatmaps']
-            elif "dreamhourglass" in model_cfg["NAME"]:
-                heatmap_pred = outputs[-1]
-            else:
-                raise ValueError
+            cam_params = {"h" : h, "w" : w, "c" : c, "input_K" : input_K}
+            heatmap_pred, joints_angle_pred, pose_pred = model(input_tensor, cam_params)
             
             heatmap_pred, joints_3d_pred = get_joint_3d_pred(heatmap_pred, cfg, h, w, c, input_K)
             #print("joints_3d_pred.shape", joints_3d_pred.shape)
@@ -113,10 +110,17 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
             ass_mAP_mean = batch_mAP_from_pose(joints_pred, joints_gt,thresholds) # 
             ass_mAP.append(ass_mAP_mean)
             
+            angles_acc_mean = batch_acc_from_joint_angles(joints_angle_pred[:, :, None].detach().cpu().numpy(), joints_1d_gt[:, :, None].detach().cpu().numpy(), acc_thresholds)
+            angles_acc.append(angles_acc_mean)
+    
+    
+
     
     ass_add_results = add_metrics(np.array(ass_add), add_thresh)
     ass_mAP_results = np.round(np.mean(ass_mAP, axis=0) * 100, 2)
     ass_mAP_dict = dict()
+    angles_results = np.round(np.mean(angles_acc,axis=0)*100, 2)
+    angles_dict = dict()
     
     # Print File and Save Results
     save_path = os.path.join(cfg["SAVE_DIR"], str(cfg["EXP_ID"]))
@@ -164,19 +168,38 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
             ass_mAP_dict[str(thresh)] = float(avg_map)
         print_to_screen_and_file(f, "")
         
+        
+        # print acc
+        for thresh, avg_acc in zip(acc_thresholds, angles_results):
+            print_to_screen_and_file(
+            f, " acc thresh: {:.5f} degree".format(thresh)
+            )
+            print_to_screen_and_file(
+            f, " acc: {:.5f} %".format(float(avg_acc))
+            )
+            angles_dict[str(thresh)] = float(avg_acc)
+        print_to_screen_and_file(f, "")
+        
     
             
-    return ass_add_results, ass_mAP_dict
+    return ass_add_results, ass_mAP_dict, angles_dict
             
             
 if __name__ == "__main__":
     cfg, args = update_config()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu' )
     
-    model = build_spdh_model(cfg)
+    model = build_whole_spdh_model(cfg, device)
+    model = torch.nn.DataParallel(model, device_ids=[0])
     start_epoch, global_iter = 0, 0
+    optimizer, scheduler = init_optimizer(model, cfg)
     epoch_id = cfg["EPOCH_ID"]
     exp_id = cfg["EXP_ID"]
+    
+    if cfg["MODEL_PATH"]:
+        path = cfg["MODEL_PATH"]
+        model, optimizer, scheduler, start_epoch, global_iter = load_spdh_model(model, optimizer, scheduler, path, device)
+        print("path", path)
     model = model.to(device)
     network_inference(model, cfg, epoch_id, device)
         

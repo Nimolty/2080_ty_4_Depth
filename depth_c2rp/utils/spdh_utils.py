@@ -25,6 +25,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch.distributed as dist
 from matplotlib import cm
+from torchsummary import summary
+
+
 
 def depthmap2normals(depthmap, normalize=True, keep_dims=True):
     """
@@ -479,7 +482,7 @@ def quaternionToRotation(q):
 
 
 # Augmentation
-def augment_3d(depth_intrinsic, points, depth16_img, joints_3D_Z):
+def augment_3d(depth_intrinsic, points, depth16_img, joints_3D_Z, R2C_Mat, R2C_Trans):
     if len(points) > 0:
         points_mean = points.mean(axis=0)
         points -= points_mean
@@ -541,8 +544,13 @@ def augment_3d(depth_intrinsic, points, depth16_img, joints_3D_Z):
                                           cx=depth_intrinsic[0, 2],
                                           cy=depth_intrinsic[1, 2]).astype(depth16_img.dtype)
         depth16_img = hole_filling(depth16_img, kernel_size=2)
+        
+        # R2C_Mat, R2C_Trans
+        R2C_Mat_after_aug = rot @ R2C_Mat
+        R2C_Trans_after_aug = rot @ R2C_Trans + tr + (np.eye(3) - rot) @ points_mean
+        
 
-    return depth16_img, joints_3D_Z
+    return depth16_img, joints_3D_Z, R2C_Mat_after_aug, R2C_Trans_after_aug
 
 
 # Normalization
@@ -643,22 +651,68 @@ def gkern(d, h, w, center, s=2, device='cuda'):
     return torch.exp(-1 * ((x - x0) ** 2 + (y - y0) ** 2 + (z - z0) ** 2) / s ** 2)
 
 
+def init_spdh_model(model, cfg, device):
+    #print(model.state_dict().keys())
+    state_dict = {}
+    spdh_checkpoint = torch.load(cfg["TRAINED_SPDH_NET_PATH"], map_location=device)["model"]
+    simplenet_checkpoint = torch.load(cfg["TRAINED_SIMPLE_NET_PATH"], map_location=device)["model"]
+    
+    for key, value in spdh_checkpoint.items():
+        if key[:6] == "module":
+            new_key = "backbone" + key[6:]
+            state_dict[new_key] = value
+        else:
+            state_dict[key] = value
+    
+    for key, value in simplenet_checkpoint.items():
+        if key[:6] == "module":
+            new_key = "simplenet" + key[6:]
+        elif "simplenet" not in key:
+            new_key = "simplenet." + key
+        else:
+            new_key = key
+        state_dict[new_key] = value
+    
+#    for name, param in model.named_parameters():
+#        print(name)
+    #summary(model, (3, 128, 128))
+    for k in model.state_dict():
+        if "soft" in k:
+            print(k)
+        if k not in state_dict:
+            print(f"Unloading {k}")
+    model.load_state_dict(state_dict, strict=False)
+    print("Loading Successfully")
+    #print("spdh", spdh_checkpoint["model"].keys())
+    #print("simplenet", simplenet_checkpoint["model"].keys())
+    
+
 def load_spdh_model(model, optimizer, scheduler, weights_dir,device):
     # weights_dir : xxxx/model.pth
 
     print(f'restoring checkpoint {weights_dir}')
 
-    checkpoint = torch.load(weights_dir, map_location=device)
+    #checkpoint = torch.load(weights_dir, map_location=device)
+    checkpoint = torch.load(weights_dir)
+    print(checkpoint.keys())
 
     start_epoch = checkpoint["epoch"]
     if "global_iter" in checkpoint:
         global_iter = checkpoint["global_iter"]
     
-    ret = model.load_state_dict(checkpoint["model"], strict=True)
+    state_dict = {}
+    for k in checkpoint["model"]:
+        if k in model.state_dict():
+            state_dict[k] = checkpoint["model"][k]
+    #ret = model.load_state_dict(checkpoint["model"], strict=False)
+    ret = model.load_state_dict(state_dict, strict=True)
     print(f'restored "{weights_dir}" model. Key errors:')
     print(ret)
     
-    optimizer.load_state_dict(checkpoint["optimizer"])
+    try:
+        optimizer.load_state_dict(checkpoint["optimizer"])
+    except:
+        pass
     print(f'restore AdamW optimizer')
     
     scheduler.load_state_dict(checkpoint["scheduler"])
@@ -688,3 +742,678 @@ def visualize_inference_results(ass_add_res, ass_mAP_res, writer, epoch):
         writer.add_scalar(f"Ass_Add/{key}", value, epoch)
     for key, value in ass_mAP_res.items():
         writer.add_scalar("Ass_3D_ACC/{:.5f} m".format(float(key)), value, epoch)
+
+def euler_angles_to_matrix(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
+    """
+    Convert rotations given as Euler angles in radians to rotation matrices.
+
+    Args:
+        euler_angles: Euler angles in radians as tensor of shape (..., 3).
+        convention: Convention string of three uppercase letters from
+            {"X", "Y", and "Z"}.
+
+    Returns:
+        Rotation matrices as tensor of shape (..., 3, 3).
+    """
+    if euler_angles.dim() == 0 or euler_angles.shape[-1] != 3:
+        raise ValueError("Invalid input euler angles.")
+    if len(convention) != 3:
+        raise ValueError("Convention must have 3 letters.")
+    if convention[1] in (convention[0], convention[2]):
+        raise ValueError(f"Invalid convention {convention}.")
+    for letter in convention:
+        if letter not in ("X", "Y", "Z"):
+            raise ValueError(f"Invalid letter {letter} in convention string.")
+    matrices = [
+        _axis_angle_rotation(c, e)
+        for c, e in zip(convention, torch.unbind(euler_angles, -1))
+    ]
+    # return functools.reduce(torch.matmul, matrices)
+    return torch.matmul(torch.matmul(matrices[0], matrices[1]), matrices[2])
+
+def _axis_angle_rotation(axis: str, angle: torch.Tensor) -> torch.Tensor:
+    """
+    Return the rotation matrices for one of the rotations about an axis
+    of which Euler angles describe, for each value of the angle given.
+
+    Args:
+        axis: Axis label "X" or "Y or "Z".
+        angle: any shape tensor of Euler angles in radians
+
+    Returns:
+        Rotation matrices as tensor of shape (..., 3, 3).
+    """
+
+    cos = torch.cos(angle)
+    sin = torch.sin(angle)
+    one = torch.ones_like(angle)
+    zero = torch.zeros_like(angle)
+
+    if axis == "X":
+        R_flat = (one, zero, zero, zero, cos, -sin, zero, sin, cos)
+    elif axis == "Y":
+        R_flat = (cos, zero, sin, zero, one, zero, -sin, zero, cos)
+    elif axis == "Z":
+        R_flat = (cos, -sin, zero, sin, cos, zero, zero, zero, one)
+    else:
+        raise ValueError("letter must be either X, Y or Z.")
+
+    return torch.stack(R_flat, -1).reshape(angle.shape + (3, 3))
+
+def compute_3n_loss_42(Angles, device=torch.device("cpu")):
+    # R : B x 3 x 3
+    # T : B x 3 x 1
+    # Angles : B x N
+    B, M, _ = Angles.shape
+    ori_trans_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.333], [0.0,0.0,0.0],\
+                                        [0.0,-0.316,0.0], [0.0825,0.0,0.0],[-0.0825,0.384,0.0],\
+                                        [0.0,0.0,0.0], [0.088,0.0,0.0],[0.0,0.0,0.107],\
+                                        [0.0,0.0,0.0584], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+    ori_angles_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+              [1.5707963267948966,0.0,0.0], [1.5707963267948966,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+               [1.5707963267948966,0.0,0.0],  [1.5707963267948966,0.0,0.0], [0.0,0.0,-1.5707963267948966/2],\
+               [0.0,0.0,0.0], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+#    joints_info = [
+#            # base and plus 3 pts
+#            {"base" : 0, "offset" : [0.0, 0.0, 0.0]},
+#            {"base" : 0, "offset" : [0.0, 0.0, 0.1]},
+#            {"base" : 0, "offset" : [0.1, 0.0, 0.0]},
+#            
+#            # joint1 and plus 3 pts
+#            {"base" : 1, "offset" : [0.0, 0.0, -0.1920]},
+#            {"base" : 1, "offset" : [0.0, 0.0, -0.0920]},
+#            {"base" : 1, "offset" : [0.1, 0.0, -0.1920]},
+#            
+#            # joint2 and plus 3 pt
+#            {"base" : 2, "offset" : [0.0, 0.0, 0.0]},
+#            {"base" : 2, "offset" : [0.0, 0.0, 0.1]},
+#            {"base" : 2, "offset" : [0.1, 0.0, 0.0]},
+#            
+#            # joint3 and plus 3 pt
+#            {"base" : 3, "offset" : [0.0, 0.0, -0.1210]},
+#            {"base" : 3, "offset" : [0.0, 0.0, -0.0210]},
+#            {"base" : 3, "offset" : [0.1, 0.0, -0.1210]},
+#            
+#            # joint4 and plus 3 pt
+#            {"base" : 4, "offset" : [0.0, 0.0, 0.0]},
+#            {"base" : 4, "offset" : [0.0, 0.0, 0.1]},
+#            {"base" : 4, "offset" : [0.1, 0.0, 0.0]},
+#            
+#            
+#            # joint5 and plus 3 pt
+#            {"base" : 5, "offset" : [0.0, 0.0, -0.2590]},
+#            {"base" : 5, "offset" : [0.0, 0.0, -0.1590]},
+#            {"base" : 5, "offset" : [0.1, 0.0, -0.2590]},
+#            
+#            
+#            # joint6 and plus 3 pt
+#            {"base" :6, "offset" : [0.0, 0.0, -0.0148]},
+#            {"base" :6, "offset" : [0.0, 0.0, 0.0852]},
+#            {"base" :6, "offset" : [0.1, 0.0, -0.0148]},
+#            
+#            
+#            # joint7 and plus 3 pt
+#            {"base" : 7, "offset" : [0.0, 0.0, 0.0520]},
+#            {"base" : 8, "offset" : [0.0, 0.0, 0.0584]},
+#            {"base" : 10, "offset" : [0.0, 0.0, 0.0]},
+#            ]
+    
+    
+    joints_info = [
+              # base and plus 3 pts
+              {"base" : 0, "offset" : [0.0, 0.0, 0.0]},
+              {"base" : 0, "offset" : [0.0, 0.0, 0.14]}, # panda_joint1
+              {"base" : 0, "offset" : [-0.11, 0.0, 0.0]},
+              
+              
+              {"base" : 1, "offset" : [0.0, 0.0, 0.0]}, # panda_joint2
+              {"base" : 1, "offset" : [0.0, -0.1294, -0.0]}, 
+              
+              
+              {"base" : 2, "offset" : [0.0, -0.1940, 0.0]}, # panda_joint3 
+              
+              {"base" : 4, "offset" : [0.0, 0.0, 0.0]},
+              {"base" : 4, "offset" : [0.0, 0.0, 0.1111]},
+              {"base" : 4, "offset" : [0.0, 0.1240, 0.0]},
+              
+              
+              {"base" : 5, "offset" : [0.0, 0.1299, 0.0]},
+              
+              
+              {"base" :6, "offset" : [0.0, 0.0, 0.0583]},
+              {"base" :6, "offset" : [0.088, 0.0, 0.0]}, 
+              
+              {"base" : 7, "offset" : [0.0, 0.0, 0.1520]},
+              {"base" : 7, "offset" : [0.06, 0.06, 0.1520]}
+              ]
+    ori_mat = torch.eye(3).repeat(B,1).reshape(B,3,3).float().to(device)
+    ori_trans = torch.zeros(B, 3, 1).float().to(device)
+    ori_angles = euler_angles_to_matrix(ori_angles_list, convention="XYZ")
+    
+    
+    kps_list, R2C_list = [], []
+    for j in range(11):
+        if j == 0:
+            kps_list.append(ori_trans.clone())
+            R2C_list.append(ori_mat.clone())
+            continue
+        this_mat = ori_angles[j].repeat(B, 1).reshape(B, 3, 3)
+        trans = ori_trans_list[j].unsqueeze(0).repeat(B, 1)
+        if 1 <= j <= 7:
+            new_mat = _axis_angle_rotation("Z", Angles[:, j-1, 0])
+            #print("this_mat.shape", this_mat.shape)
+            #print("new_mat.shape", new_mat.shape)
+            this_mat = torch.bmm(this_mat, new_mat)
+        if j == 9:
+            trans = trans + Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+        if j == 10:
+            trans = trans + (-2) * Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+         
+         
+        ori_trans += torch.bmm(ori_mat, trans.unsqueeze(2))
+        ori_mat = torch.bmm(ori_mat, this_mat)
+        kps_list.append(ori_trans.float().clone())
+        R2C_list.append(ori_mat.float().clone())
+        
+    N = len(joints_info)    
+    joints_x3d_rob = torch.zeros(B, N, 3, 1).to(device)
+    for idx in range(len(joints_info)):
+        base_idx, offset = joints_info[idx]["base"], torch.from_numpy(np.array(joints_info[idx]["offset"]))[None, :, None].repeat(B, 1, 1).to(device)
+        this_x3d = torch.bmm(R2C_list[base_idx], offset.float()) + kps_list[base_idx]
+        joints_x3d_rob[:, idx, :, :] = this_x3d.clone()
+    
+    joints_x3d_rob = joints_x3d_rob.squeeze(3)
+    
+    return joints_x3d_rob
+    
+def compute_3n_loss_39(Angles, device=torch.device("cpu")): 
+    # R : B x 3 x 3
+    # T : B x 3 x 1
+    # Angles : B x N
+    B, M, _ = Angles.shape
+    ori_trans_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.333], [0.0,0.0,0.0],\
+                                        [0.0,-0.316,0.0], [0.0825,0.0,0.0],[-0.0825,0.384,0.0],\
+                                        [0.0,0.0,0.0], [0.088,0.0,0.0],[0.0,0.0,0.107],\
+                                        [0.0,0.0,0.0584], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+    ori_angles_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+              [1.5707963267948966,0.0,0.0], [1.5707963267948966,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+               [1.5707963267948966,0.0,0.0],  [1.5707963267948966,0.0,0.0], [0.0,0.0,-1.5707963267948966/2],\
+               [0.0,0.0,0.0], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+    joints_info = [
+            # base and plus 3 pts
+            {"base" : 0, "offset" : [0.0, 0.0, 0.0]},
+            {"base" : 0, "offset" : [0.0, 0.0, 0.1]},
+            {"base" : 0, "offset" : [0.1, 0.0, 0.0]},
+            
+            # joint1 and plus 3 pts
+            {"base" : 1, "offset" : [0.0, 0.0, -0.1920]},
+            {"base" : 1, "offset" : [0.0, 0.0, -0.0920]},
+            {"base" : 1, "offset" : [0.1, 0.0, -0.1920]},
+            
+            # joint2 and plus 3 pt
+            {"base" : 2, "offset" : [0.0, 0.0, 0.0]},
+            {"base" : 2, "offset" : [0.0, 0.0, 0.1]},
+            {"base" : 2, "offset" : [0.1, 0.0, 0.0]},
+            
+            # joint3 and plus 3 pt
+            {"base" : 3, "offset" : [0.0, 0.0, -0.1210]},
+            {"base" : 3, "offset" : [0.0, 0.0, -0.0210]},
+            {"base" : 3, "offset" : [0.1, 0.0, -0.1210]},
+            
+            # joint4 and plus 3 pt
+            {"base" : 4, "offset" : [0.0, 0.0, 0.0]},
+            {"base" : 4, "offset" : [0.0, 0.0, 0.1]},
+            {"base" : 4, "offset" : [0.1, 0.0, 0.0]},
+            
+            
+            # joint5 and plus 3 pt
+            {"base" : 5, "offset" : [0.0, 0.0, -0.2590]},
+            {"base" : 5, "offset" : [0.0, 0.0, -0.1590]},
+            {"base" : 5, "offset" : [0.1, 0.0, -0.2590]},
+            
+            
+            # joint6 and plus 3 pt
+            {"base" :6, "offset" : [0.0, 0.0, -0.0148]},
+            {"base" :6, "offset" : [0.0, 0.0, 0.0852]},
+            {"base" :6, "offset" : [0.1, 0.0, -0.0148]},
+            
+            
+            # joint7 and plus 3 pt
+            {"base" : 7, "offset" : [0.0, 0.0, 0.0520]},
+            {"base" : 8, "offset" : [0.0, 0.0, 0.0584]},
+            {"base" : 10, "offset" : [0.0, 0.0, 0.0]},
+            ]
+    
+    
+    
+    ori_mat = torch.eye(3).repeat(B,1).reshape(B,3,3).float().to(device)
+    ori_trans = torch.zeros(B, 3, 1).float().to(device)
+    ori_angles = euler_angles_to_matrix(ori_angles_list, convention="XYZ")
+    
+    
+    kps_list, R2C_list = [], []
+    for j in range(11):
+        if j == 0:
+            kps_list.append(ori_trans.clone())
+            R2C_list.append(ori_mat.clone())
+            continue
+        this_mat = ori_angles[j].repeat(B, 1).reshape(B, 3, 3)
+        trans = ori_trans_list[j].unsqueeze(0).repeat(B, 1)
+        if 1 <= j <= 7:
+            new_mat = _axis_angle_rotation("Z", Angles[:, j-1, 0])
+            #print("this_mat.shape", this_mat.shape)
+            #print("new_mat.shape", new_mat.shape)
+            this_mat = torch.bmm(this_mat, new_mat)
+#        if j == 9:
+#            trans = trans + Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+#        if j == 10:
+#            trans = trans + (-2) * Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+         
+         
+        ori_trans += torch.bmm(ori_mat, trans.unsqueeze(2))
+        ori_mat = torch.bmm(ori_mat, this_mat)
+        kps_list.append(ori_trans.float().clone())
+        R2C_list.append(ori_mat.float().clone())
+        
+    N = len(joints_info)    
+    joints_x3d_rob = torch.zeros(B, N, 3, 1).to(device)
+    for idx in range(len(joints_info)):
+        base_idx, offset = joints_info[idx]["base"], torch.from_numpy(np.array(joints_info[idx]["offset"]))[None, :, None].repeat(B, 1, 1).to(device)
+        this_x3d = torch.bmm(R2C_list[base_idx], offset.float()) + kps_list[base_idx]
+        joints_x3d_rob[:, idx, :, :] = this_x3d.clone()
+    
+    joints_x3d_rob = joints_x3d_rob.squeeze(3)
+    
+    return joints_x3d_rob
+    
+def compute_3n_loss_40(Angles, device=torch.device("cpu")):
+    # R : B x 3 x 3
+    # T : B x 3 x 1
+    # Angles : B x N
+    B, M, _ = Angles.shape
+    ori_trans_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.333], [0.0,0.0,0.0],\
+                                        [0.0,-0.316,0.0], [0.0825,0.0,0.0],[-0.0825,0.384,0.0],\
+                                        [0.0,0.0,0.0], [0.088,0.0,0.0],[0.0,0.0,0.107],\
+                                        [0.0,0.0,0.0584], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+    ori_angles_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+              [1.5707963267948966,0.0,0.0], [1.5707963267948966,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+               [1.5707963267948966,0.0,0.0],  [1.5707963267948966,0.0,0.0], [0.0,0.0,-1.5707963267948966/2],\
+               [0.0,0.0,0.0], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+#    joints_info = [
+#            # base and plus 3 pts
+#            {"base" : 0, "offset" : [0.0, 0.0, 0.0]},
+#            {"base" : 0, "offset" : [0.0, 0.0, 0.1]},
+#            {"base" : 0, "offset" : [0.1, 0.0, 0.0]},
+#            
+#            # joint1 and plus 3 pts
+#            {"base" : 1, "offset" : [0.0, 0.0, -0.1920]},
+#            {"base" : 1, "offset" : [0.0, 0.0, -0.0920]},
+#            {"base" : 1, "offset" : [0.1, 0.0, -0.1920]},
+#            
+#            # joint2 and plus 3 pt
+#            {"base" : 2, "offset" : [0.0, 0.0, 0.0]},
+#            {"base" : 2, "offset" : [0.0, 0.0, 0.1]},
+#            {"base" : 2, "offset" : [0.1, 0.0, 0.0]},
+#            
+#            # joint3 and plus 3 pt
+#            {"base" : 3, "offset" : [0.0, 0.0, -0.1210]},
+#            {"base" : 3, "offset" : [0.0, 0.0, -0.0210]},
+#            {"base" : 3, "offset" : [0.1, 0.0, -0.1210]},
+#            
+#            # joint4 and plus 3 pt
+#            {"base" : 4, "offset" : [0.0, 0.0, 0.0]},
+#            {"base" : 4, "offset" : [0.0, 0.0, 0.1]},
+#            {"base" : 4, "offset" : [0.1, 0.0, 0.0]},
+#            
+#            
+#            # joint5 and plus 3 pt
+#            {"base" : 5, "offset" : [0.0, 0.0, -0.2590]},
+#            {"base" : 5, "offset" : [0.0, 0.0, -0.1590]},
+#            {"base" : 5, "offset" : [0.1, 0.0, -0.2590]},
+#            
+#            
+#            # joint6 and plus 3 pt
+#            {"base" :6, "offset" : [0.0, 0.0, -0.0148]},
+#            {"base" :6, "offset" : [0.0, 0.0, 0.0852]},
+#            {"base" :6, "offset" : [0.1, 0.0, -0.0148]},
+#            
+#            
+#            # joint7 and plus 3 pt
+#            {"base" : 7, "offset" : [0.0, 0.0, 0.0520]},
+#            {"base" : 8, "offset" : [0.0, 0.0, 0.0584]},
+#            {"base" : 10, "offset" : [0.0, 0.0, 0.0]},
+#            ]
+    
+    
+    joints_info = [
+              # base and plus 3 pts
+              {"base" : 0, "offset" : [0.0, 0.0, 0.0]},
+              {"base" : 0, "offset" : [0.0, 0.0, 0.1]},
+              {"base" : 0, "offset" : [0.1, 0.0, 0.0]},
+              
+              # joint1 and plus 3 pts
+              {"base" : 1, "offset" : [0.0, 0.0, -0.1920]},
+              {"base" : 1, "offset" : [0.0, 0.0, -0.0920]},
+              {"base" : 1, "offset" : [0.1, 0.0, -0.1920]},
+              
+              # joint2 and plus 3 pt
+              {"base" : 2, "offset" : [0.0, 0.0, 0.0]},
+              {"base" : 2, "offset" : [0.0, 0.0, 0.1]},
+              {"base" : 2, "offset" : [0.1, 0.0, 0.0]},
+              
+              # joint3 and plus 3 pt
+              {"base" : 3, "offset" : [0.0, 0.0, -0.1210]},
+              {"base" : 3, "offset" : [0.0, 0.0, -0.0210]},
+              {"base" : 3, "offset" : [0.1, 0.0, -0.1210]},
+              
+              # joint4 and plus 3 pt
+              {"base" : 4, "offset" : [0.0, 0.0, 0.0]},
+              {"base" : 4, "offset" : [0.0, 0.0, 0.1]},
+              {"base" : 4, "offset" : [0.1, 0.0, 0.0]},
+              
+              
+              # joint5 and plus 3 pt
+              {"base" : 5, "offset" : [0.0, 0.0, -0.2590]},
+              {"base" : 5, "offset" : [0.0, 0.0, -0.1590]},
+              {"base" : 5, "offset" : [0.1, 0.0, -0.2590]},
+              
+              
+              # joint6 and plus 3 pt
+              {"base" :6, "offset" : [0.0, 0.0, -0.0148]},
+              {"base" :6, "offset" : [0.0, 0.0, 0.0852]},
+              {"base" :6, "offset" : [0.1, 0.0, -0.0148]},
+              
+              
+              # joint7 and plus 3 pt
+              {"base" : 7, "offset" : [0.0, 0.0, 0.0520]},
+              {"base" : 7, "offset" : [0.0, 0.0, 0.1520]},
+              {"base" : 7, "offset" : [0.1, 0.0, 0.0520]}
+              ]
+    ori_mat = torch.eye(3).repeat(B,1).reshape(B,3,3).float().to(device)
+    ori_trans = torch.zeros(B, 3, 1).float().to(device)
+    ori_angles = euler_angles_to_matrix(ori_angles_list, convention="XYZ")
+    
+    
+    kps_list, R2C_list = [], []
+    for j in range(11):
+        if j == 0:
+            kps_list.append(ori_trans.clone())
+            R2C_list.append(ori_mat.clone())
+            continue
+        this_mat = ori_angles[j].repeat(B, 1).reshape(B, 3, 3)
+        trans = ori_trans_list[j].unsqueeze(0).repeat(B, 1)
+        if 1 <= j <= 7:
+            new_mat = _axis_angle_rotation("Z", Angles[:, j-1, 0])
+            #print("this_mat.shape", this_mat.shape)
+            #print("new_mat.shape", new_mat.shape)
+            this_mat = torch.bmm(this_mat, new_mat)
+        if j == 9:
+            trans = trans + Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+        if j == 10:
+            trans = trans + (-2) * Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+         
+         
+        ori_trans += torch.bmm(ori_mat, trans.unsqueeze(2))
+        ori_mat = torch.bmm(ori_mat, this_mat)
+        kps_list.append(ori_trans.float().clone())
+        R2C_list.append(ori_mat.float().clone())
+        
+    N = len(joints_info)    
+    joints_x3d_rob = torch.zeros(B, N, 3, 1).to(device)
+    for idx in range(len(joints_info)):
+        base_idx, offset = joints_info[idx]["base"], torch.from_numpy(np.array(joints_info[idx]["offset"]))[None, :, None].repeat(B, 1, 1).to(device)
+        this_x3d = torch.bmm(R2C_list[base_idx], offset.float()) + kps_list[base_idx]
+        joints_x3d_rob[:, idx, :, :] = this_x3d.clone()
+    
+    joints_x3d_rob = joints_x3d_rob.squeeze(3)
+    
+    return joints_x3d_rob
+    
+def compute_kps_joints_loss(R, T, Angles, device):
+    # R : B x 3 x 3
+    # T : B x 3 x 1
+    # Angles : B x 7 x 1
+    B, _, _ = Angles.shape
+    ori_trans_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.333], [0.0,0.0,0.0],\
+                                        [0.0,-0.316,0.0], [0.0825,0.0,0.0],[-0.0825,0.384,0.0],\
+                                        [0.0,0.0,0.0], [0.088,0.0,0.0],[0.0,0.0,0.107],\
+                                        [0.0,0.0,0.0584], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+    ori_angles_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+              [1.5707963267948966,0.0,0.0], [1.5707963267948966,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+               [1.5707963267948966,0.0,0.0],  [1.5707963267948966,0.0,0.0], [0.0,0.0,-1.5707963267948966/2],\
+               [0.0,0.0,0.0], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+    joints_info = [
+              # joint1 and plus 3 pts
+              {"base" : 0, "offset" : [0.0, 0.0, 0.14]},
+              # joint2 and plus 1 pt
+              {"base" : 1, "offset" : [0.0, 0.0, 0.0]},
+              # joint3 and plus 1 pt
+              {"base" : 3, "offset" : [0.0, 0.0, -0.1210]},
+              # joint4 and plus 1 pt
+              {"base" : 4, "offset" : [0.0, 0.0, 0.0]},
+              # joint5 and plus 1 pt
+              {"base" : 5, "offset" : [0.0, 0.0, -0.2590]},
+              # joint6 and plus 1 pt
+              {"base" :5, "offset" : [0.0, 0.0158, 0.0]},
+              # joint7 and plus 1 pt
+              {"base" : 7, "offset" : [0.0, 0.0, 0.0520]},
+              ]
+    
+    ori_mat = torch.eye(3).repeat(B,1).reshape(B,3,3).float().to(device)
+    ori_trans = torch.zeros(B, 3, 1).float().to(device)
+    ori_angles = euler_angles_to_matrix(ori_angles_list, convention="XYZ")
+    
+    
+    kps_list, R2C_list = [], []
+    for j in range(ori_trans_list.shape[0]):
+        if j == 0:
+            kps_list.append(ori_trans.clone())
+            R2C_list.append(ori_mat.clone())
+            continue
+        this_mat = ori_angles[j].repeat(B, 1).reshape(B, 3, 3)
+        trans = ori_trans_list[j].unsqueeze(0).repeat(B, 1)
+        if 1 <= j <= 7:
+            new_mat = _axis_angle_rotation("Z", Angles[:, j-1, 0])
+            #print("this_mat.shape", this_mat.shape)
+            #print("new_mat.shape", new_mat.shape)
+            this_mat = torch.bmm(this_mat, new_mat)
+#        if j == 9:
+#            trans = trans + Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+#        if j == 10:
+#            trans = trans + (-2) * Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+         
+        ori_trans += torch.bmm(ori_mat, trans.unsqueeze(2))
+        ori_mat = torch.bmm(ori_mat, this_mat)
+        kps_list.append(ori_trans.float().clone())
+        R2C_list.append(ori_mat.float().clone())
+        
+#    N = len(joints_info)    
+#    joints_x3d_rob = torch.zeros(B, N, 3, 1).to(device)
+#    for idx in range(len(joints_info)):
+#        base_idx, offset = joints_info[idx]["base"], torch.from_numpy(np.array(joints_info[idx]["offset"]))[None, :, None].repeat(B, 1, 1).to(device)
+#        this_x3d = torch.bmm(R2C_list[base_idx], offset.float()) + kps_list[base_idx]
+#        joints_x3d_rob[:, idx, :, :] = this_x3d.clone()
+    
+    kps_idx_lst = [0,2,3,4,6,7,8]
+    N = len(kps_idx_lst)
+    joints_x3d_rob = torch.zeros(B, N, 3, 1).to(device)
+    for idx in range(N):
+        joints_x3d_rob[:, idx, :, :] = kps_list[kps_idx_lst[idx]]
+    
+    
+    joints_x3d_rob = joints_x3d_rob.squeeze(3)
+    #print("R.shape", R.shape)
+    #print("T", T.shape)
+    #print("joitns_x3d_rob", joints_x3d_rob.shape)
+    joints_x3d_cam= torch.bmm(R, joints_x3d_rob.permute(0, 2, 1).contiguous()) + T
+    return joints_x3d_cam.permute(0,2,1).contiguous()    
+
+
+def compute_DX_loss(dt_pts, gt_pts):
+    B, N, _ = dt_pts.shape
+    assert dt_pts.shape == gt_pts.shape
+    device = dt_pts.device
+    one_vec = torch.full((B, N, 1), 1).to(device).float() # B x N x 1
+    X_dt = torch.bmm(dt_pts, dt_pts.permute(0, 2, 1)) # B x N x N
+    X_gt = torch.bmm(gt_pts, gt_pts.permute(0, 2, 1)) # B x N x N
+    diag_X_dt = torch.diagonal(X_dt, dim1=-1, dim2=-2).unsqueeze(2) # B x N x 1
+    diag_X_gt = torch.diagonal(X_gt, dim1=-1, dim2=-2).unsqueeze(2) # B x N x 1
+
+    D_dt = torch.bmm(diag_X_dt, one_vec.permute(0, 2, 1)) + \
+           torch.bmm(one_vec, diag_X_dt.permute(0, 2, 1)) - \
+           2 * X_dt
+    D_gt = torch.bmm(diag_X_gt, one_vec.permute(0, 2, 1)) + \
+           torch.bmm(one_vec, diag_X_gt.permute(0, 2, 1)) - \
+           2 * X_gt
+    #print(torch.tril(D_dt))
+    #print(torch.sum((D_dt - D_gt) ** 2))
+    return torch.norm(torch.tril(D_dt) - torch.tril(D_gt))
+    
+def compute_rigid_transform(a: torch.Tensor, b: torch.Tensor, weights: torch.Tensor = None):
+    """Compute rigid transforms between two point sets
+    Args:
+        a (torch.Tensor): ([*,] N, 3) points
+        b (torch.Tensor): ([*,] N, 3) points
+        weights (torch.Tensor): ([*, ] N)
+    Returns:
+        Transform T ([*,] 3, 4) to get from a to b, i.e. T*a = b
+    """
+
+    assert a.shape == b.shape
+    assert a.shape[-1] == 3
+
+    if weights is not None:
+        assert a.shape[:-1] == weights.shape
+        assert weights.min() >= 0 and weights.max() <= 1
+
+        weights_normalized = weights[..., None] / \
+                              torch.clamp_min(torch.sum(weights, dim=-1, keepdim=True)[..., None], _EPS)
+        centroid_a = torch.sum(a * weights_normalized, dim=-2)
+        centroid_b = torch.sum(b * weights_normalized, dim=-2)
+        a_centered = a - centroid_a[..., None, :]
+        b_centered = b - centroid_b[..., None, :]
+        cov = a_centered.transpose(-2, -1) @ (b_centered * weights_normalized)
+    else:
+        centroid_a = torch.mean(a, dim=-2)
+        centroid_b = torch.mean(b, dim=-2)
+        a_centered = a - centroid_a[..., None, :]
+        b_centered = b - centroid_b[..., None, :]
+        cov = a_centered.transpose(-2, -1) @ b_centered
+
+    # Compute rotation using Kabsch algorithm. Will compute two copies with +/-V[:,:3]
+    # and choose based on determinant to avoid flips
+    u, s, v = torch.svd(cov, some=False, compute_uv=True)
+    rot_mat_pos = v @ u.transpose(-1, -2)
+    v_neg = v.clone()
+    v_neg[..., 2] *= -1
+    rot_mat_neg = v_neg @ u.transpose(-1, -2)
+    rot_mat = torch.where(torch.det(rot_mat_pos)[..., None, None] > 0, rot_mat_pos, rot_mat_neg)
+
+    # Compute translation (uncenter centroid)
+    translation = -rot_mat @ centroid_a[..., :, None] + centroid_b[..., :, None]
+
+    transform = torch.cat((rot_mat, translation), dim=-1)
+    return transform
+
+def write_prediction_and_gt(path_meta, joints_3d_pred_gather, joints_3d_gt_gather,  
+                                         pose_pred_gather, pose_gt_gather, 
+                                         joints_angle_pred_gather, joints_angle_gt_gather,
+                                         kps_pred_gather, kps_gt_gather
+                                          ):
+    # joints_3d_pred_gather : B x num_kps x 3
+    # joints_angle_pred_gather : B x num_joints
+    # pose_pred_gather : # B x 3 x 4
+    #if not os.path.exists(path_meta):
+    file_write_meta = open(path_meta, 'w')
+    meta_json = dict()
+    meta_json["joints_3d_pred_gather"] = joints_3d_pred_gather.flatten(1).detach().cpu().numpy().tolist()
+    meta_json["joints_3d_gt_gather"] = joints_3d_gt_gather.flatten(1).detach().cpu().numpy().tolist()
+    meta_json["joints_angle_pred_gather"] = joints_angle_pred_gather.detach().cpu().numpy().tolist()
+    meta_json["joints_angle_gt_gather"] = joints_angle_gt_gather.detach().cpu().numpy().tolist()
+    meta_json["pose_pred_gather"] = pose_pred_gather.flatten(1).detach().cpu().numpy().tolist()
+    meta_json["pose_gt_gather"] = pose_gt_gather.flatten(1).detach().cpu().numpy().tolist()
+    meta_json["kps_pred_gather"] = kps_pred_gather.flatten(1).detach().cpu().numpy().tolist()
+    meta_json["kps_gt_gather"] = kps_gt_gather.flatten(1).detach().cpu().numpy().tolist()
+    
+    json_save = json.dumps(meta_json, indent=1)
+    file_write_meta.write(json_save)
+    file_write_meta.close()
+
+def load_prediction_and_gt(path_meta):
+    json_in = open(path_meta, 'r')
+    json_data = json.load(json_in)
+    
+    kwargs = dict()
+    B, _ = np.array(json_data["joints_3d_pred_gather"]).shape
+    kwargs["joints_3d_pred_gather"] = np.array(json_data["joints_3d_pred_gather"]).reshape(B, -1, 3)
+    kwargs["joints_3d_gt_gather"] = np.array(json_data["joints_3d_gt_gather"]).reshape(B, -1, 3)
+    kwargs["pose_pred_gather"] = np.array(json_data["pose_pred_gather"]).reshape(B, -1, 4)
+    kwargs["pose_gt_gather"] = np.array(json_data["pose_gt_gather"]).reshape(B, -1, 4)
+    kwargs["joints_angle_pred_gather"] = np.array(json_data["joints_angle_pred_gather"])
+    kwargs["joints_angle_gt_gather"] = np.array(json_data["joints_angle_gt_gather"])
+    kwargs["kps_pred_gather"] = np.array(json_data["kps_pred_gather"]).reshape(B, -1, 3)
+    kwargs["kps_gt_gather"] = np.array(json_data["kps_gt_gather"]).reshape(B, -1, 3)
+    
+    return kwargs
+
+
+
+if __name__ == "__main__":
+    device = torch.device("cpu")
+    Angles = torch.tensor([
+        [-0.6526082062025893,
+          0.9279837857801965,
+          2.551399836921973,
+          -2.33985123801545,
+          1.4105617980583107,
+          2.125588105143108,
+          1.2248684962301084,
+          0.008025813124212734
+         ]
+        ])
+    c = compute_3n_loss(Angles[:, :, None], device)
+    R = torch.from_numpy(np.array([
+     [
+      0.9645388230978529,
+      0.26324603195543156,
+      -0.019139768031082402
+     ],
+     [
+      0.03466327105203122,
+      -0.19822634128022626,
+      -0.9795431416481116
+     ],
+     [
+      -0.2616548784482034,
+      0.9441439887639793,
+      -0.20032198538305357
+     ]
+    ]))[None, :, :]
+    T = torch.from_numpy(np.array([
+     -0.37863880349038576,
+     0.2666280120354375,
+     1.5995485870204855
+    ]))[None, :, None]
+    
+    c= torch.bmm(R.float(), c.permute(0, 2, 1).contiguous().float()) + T.float()
+    print(c.permute(0, 2, 1))
+    print(c.permute(0, 2, 1).shape)
+    
+    
+    
+
+    
+    
+    
+    
+    
+    
+    

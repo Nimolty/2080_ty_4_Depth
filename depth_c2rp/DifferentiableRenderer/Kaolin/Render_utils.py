@@ -177,7 +177,7 @@ def load_part_mesh(paths, device):
 def concat_part_mesh(vertices_list, Angles, device, joints_x3d=False):
     # Angles.shape : B x N x 1
     B, N, _ = Angles.shape
-    assert N == 8
+    #assert N == 8
 
     ori_trans_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.333], [0.0,0.0,0.0],\
                                         [0.0,-0.316,0.0], [0.0825,0.0,0.0],[-0.0825,0.384,0.0],\
@@ -225,10 +225,10 @@ def concat_part_mesh(vertices_list, Angles, device, joints_x3d=False):
             new_mat = _axis_angle_rotation("Z", Angles[:, j-1, 0])
             this_mat = torch.bmm(this_mat, new_mat)
 
-        if j == 9:
-            trans = trans + Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
-        if j == 10:
-            trans = trans + (-2) * Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+#        if j == 9:
+#            trans = trans + Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+#        if j == 10:
+#            trans = trans + (-2) * Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
                 
         ori_trans += torch.bmm(ori_mat, trans.unsqueeze(2))
         ori_mat = torch.bmm(ori_mat, this_mat)

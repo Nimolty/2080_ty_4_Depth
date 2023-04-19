@@ -176,15 +176,23 @@ def visualize_training_lr(lr, writer, batch_idx, epoch, data_loader_length):
     writer.add_scalar(f"LR/Learning_Rate", lr, batch_idx + (epoch-1) * data_loader_length)
 
 
-def visualize_inference_results(ass_add_res, ass_mAP_res, ori_add_res, ori_mAP_res, angles_res, writer, epoch):
+#def visualize_inference_results(ass_add_res, ass_mAP_res, ori_add_res, ori_mAP_res, angles_res, writer, epoch):
+#    for key, value in ass_add_res.items():
+#        writer.add_scalar(f"Ass_Add/{key}", value, epoch)
+#    for key, value in ass_mAP_res.items():
+#        writer.add_scalar("Ass_3D_ACC/{:.5f} m".format(float(key)), value, epoch)
+#    for key, value in ori_add_res.items():
+#        writer.add_scalar(f"Ori_Add/{key}", value, epoch)
+#    for key, value in ori_mAP_res.items():
+#        writer.add_scalar("Ori_3D_ACC/{:.5f} m".format(float(key)), value, epoch)
+#    for key, value in angles_res.items():
+#        writer.add_scalar("Angles_ACC/{:.5f} degree".format(float(key)), value, epoch)
+
+def visualize_inference_results(ass_add_res, ass_mAP_res, angles_res, writer, epoch):
     for key, value in ass_add_res.items():
         writer.add_scalar(f"Ass_Add/{key}", value, epoch)
     for key, value in ass_mAP_res.items():
         writer.add_scalar("Ass_3D_ACC/{:.5f} m".format(float(key)), value, epoch)
-    for key, value in ori_add_res.items():
-        writer.add_scalar(f"Ori_Add/{key}", value, epoch)
-    for key, value in ori_mAP_res.items():
-        writer.add_scalar("Ori_3D_ACC/{:.5f} m".format(float(key)), value, epoch)
     for key, value in angles_res.items():
         writer.add_scalar("Angles_ACC/{:.5f} degree".format(float(key)), value, epoch)
     
@@ -839,6 +847,77 @@ def compute_2nplus2_loss(R, T, Angles, device):
             trans = trans + Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
         if j == 10:
             trans = trans + (-2) * Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+         
+        ori_trans += torch.bmm(ori_mat, trans.unsqueeze(2))
+        ori_mat = torch.bmm(ori_mat, this_mat)
+        kps_list.append(ori_trans.float().clone())
+        R2C_list.append(ori_mat.float().clone())
+        
+    N = len(joints_info)    
+    joints_x3d_rob = torch.zeros(B, N, 3, 1).to(device)
+    for idx in range(len(joints_info)):
+        base_idx, offset = joints_info[idx]["base"], torch.from_numpy(np.array(joints_info[idx]["offset"]))[None, :, None].repeat(B, 1, 1).to(device)
+        this_x3d = torch.bmm(R2C_list[base_idx], offset.float()) + kps_list[base_idx]
+        joints_x3d_rob[:, idx, :, :] = this_x3d.clone()
+    
+    joints_x3d_rob = joints_x3d_rob.squeeze(3)
+    joints_x3d_cam= torch.bmm(R, joints_x3d_rob.permute(0, 2, 1).contiguous()) + T
+    return joints_x3d_cam.permute(0,2,1).contiguous()
+
+def compute_kps_joints_loss(R, T, Angles, device):
+    # R : B x 3 x 3
+    # T : B x 3 x 1
+    # Angles : B x 7 x 1
+    B, _, _ = Angles.shape
+    ori_trans_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.333], [0.0,0.0,0.0],\
+                                        [0.0,-0.316,0.0], [0.0825,0.0,0.0],[-0.0825,0.384,0.0],\
+                                        [0.0,0.0,0.0], [0.088,0.0,0.0],[0.0,0.0,0.107],\
+                                        [0.0,0.0,0.0584], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+    ori_angles_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+              [1.5707963267948966,0.0,0.0], [1.5707963267948966,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+               [1.5707963267948966,0.0,0.0],  [1.5707963267948966,0.0,0.0], [0.0,0.0,-1.5707963267948966/2],\
+               [0.0,0.0,0.0], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+    joints_info = [
+              # joint1 and plus 3 pts
+              {"base" : 0, "offset" : [0.0, 0.0, 0.14]},
+              # joint2 and plus 1 pt
+              {"base" : 1, "offset" : [0.0, 0.0, 0.0]},
+              # joint3 and plus 1 pt
+              {"base" : 3, "offset" : [0.0, 0.0, -0.1210]},
+              # joint4 and plus 1 pt
+              {"base" : 4, "offset" : [0.0, 0.0, 0.0]},
+              # joint5 and plus 1 pt
+              {"base" : 5, "offset" : [0.0, 0.0, -0.2590]},
+              # joint6 and plus 1 pt
+              {"base" :5, "offset" : [0.0, 0.0158, 0.0]},
+              # joint7 and plus 1 pt
+              {"base" : 7, "offset" : [0.0, 0.0, 0.0520]},
+              ]
+    
+    ori_mat = torch.eye(3).repeat(B,1).reshape(B,3,3).float().to(device)
+    ori_trans = torch.zeros(B, 3, 1).float().to(device)
+    ori_angles = euler_angles_to_matrix(ori_angles_list, convention="XYZ")
+    
+    
+    kps_list, R2C_list = [], []
+    for j in range(ori_trans_list.shape[0]):
+        if j == 0:
+            kps_list.append(ori_trans.clone())
+            R2C_list.append(ori_mat.clone())
+            continue
+        this_mat = ori_angles[j].repeat(B, 1).reshape(B, 3, 3)
+        trans = ori_trans_list[j].unsqueeze(0).repeat(B, 1)
+        if 1 <= j <= 7:
+            new_mat = _axis_angle_rotation("Z", Angles[:, j-1, 0])
+            #print("this_mat.shape", this_mat.shape)
+            #print("new_mat.shape", new_mat.shape)
+            this_mat = torch.bmm(this_mat, new_mat)
+#        if j == 9:
+#            trans = trans + Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+#        if j == 10:
+#            trans = trans + (-2) * Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
          
         ori_trans += torch.bmm(ori_mat, trans.unsqueeze(2))
         ori_mat = torch.bmm(ori_mat, this_mat)

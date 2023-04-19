@@ -4,7 +4,30 @@ import torch
 import cv2
 from depth_c2rp.utils.utils import quaternionToRotation
 from depth_c2rp.utils.utils import batch_quaternion_matrix, compute_concat_loss
+from depth_c2rp.utils.spdh_network_utils import compute_rigid_transform
 import math
+
+def batch_outlier_removal_pose(joints_2D, joints_3d_rob_pred, joints_3d_pred_norm, joints_3d_pred, size):
+    # expect all tensors
+    # joints_2D : B x N x 2
+    # joints_3d_pred : B X N X 3
+    # joints_3d_norm : B X N X 3
+    H, W = size
+    assert H == W
+    B, N, _ = joints_2D.shape
+    pose_list = []
+    
+    for b in range(B):
+        index = torch.where(torch.abs((joints_2D[b] - H // 2) > H // 2))
+        index = torch.unique(index[0])
+        joints_2D[b][index] = -999.999
+        
+        valid_index = torch.unique(torch.where(joints_2D[b] > -999.999)[0])
+        pose_pred = (compute_rigid_transform(joints_3d_rob_pred[b][valid_index],joints_3d_pred_norm[b][valid_index])).unsqueeze(0)
+        pose_pred[:, :3, 3] = joints_3d_pred[b][0].reshape(1,3) + pose_pred[:, :3, 3]
+        pose_list.append(pose_pred)
+    return torch.cat(pose_list, dim=0) 
+
 
 def add_from_pose(quaternion, trans, x3d_wrt_cam, x3d_wrt_rob):
     # x3d_wrt_cam : (N, 3) ; x3d_wrt_rob : (N, 3)
@@ -45,8 +68,9 @@ def batch_mAP_from_pose(dt_joints_wrt_cam, gt_joints_wrt_cam, thresholds):
 def batch_acc_from_joint_angles(dt_joints_pos, gt_joints_pos, thresholds):
     # dt_joitns_pos, gt_joints_pos : B x 8 x 1
     this_acc = []
-    #dist_angles = np.abs(dt_joints_pos,gt_joints_pos)[:, :-1, 0] # B x 8 Find the bug！
-    dist_angles = np.abs(dt_joints_pos - gt_joints_pos)[:, :-1, 0] # B x 8
+    #dist_angles = np.abs(dt_joints_pos,gt_joints_pos)[:, :-1, 0] # B x 7 Find the bug！
+    dist_angles = np.abs(dt_joints_pos - gt_joints_pos) # B x 7
+    #print("dist_angles", dist_angles)
     for thresh in thresholds:
         radian_thresh = math.radians(thresh)
         avg_acc = np.mean(dist_angles < radian_thresh) 

@@ -81,10 +81,10 @@ def random_blend_grid(true_blends, pred_blends):
     return grid
 
 def get_joint_3d_pred(heatmap_pred, cfg, h, w, c, input_K):
-    if cfg["MODEL"]["NAME"] == "stacked_hourglass":
-        heatmap_pred = (F.interpolate(heatmap_pred[-1], (h, w), mode='bicubic', align_corners=False) + 1) / 2.
-    else:
-        heatmap_pred = (F.interpolate(heatmap_pred, (h, w), mode='bicubic', align_corners=False) + 1) / 2.
+#    if cfg["MODEL"]["NAME"] == "stacked_hourglass":
+#        heatmap_pred = (F.interpolate(heatmap_pred[-1], (h, w), mode='bicubic', align_corners=False) + 1) / 2.
+#    else:
+#        heatmap_pred = (F.interpolate(heatmap_pred, (h, w), mode='bicubic', align_corners=False) + 1) / 2.
     
     B, C, H, W = heatmap_pred.shape
     joints_3d_pred = np.ones((B, C // 2, 3))
