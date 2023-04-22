@@ -1364,6 +1364,12 @@ def load_prediction_and_gt(path_meta):
     
     return kwargs
 
+def compute_3d_error(joints_3d_gt_norm, joints_3d_pred_norm):
+    # joints_3d_pred_norm : B x num_kps x 3
+    
+    return joints_3d_pred_norm.permute(1, 0, 2) - joints_3d_gt_norm.permute(1, 0, 2)
+
+
 
 
 if __name__ == "__main__":

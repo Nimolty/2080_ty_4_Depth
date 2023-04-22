@@ -19,14 +19,16 @@
 #CUDA_VISIBLE_DEVICES=0 python /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/tools/inference_spdh_toy.py --exp_id 49 --epoch_id 1 --cfg "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_37_spdh_resnet_h.yaml" --syn_test "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn"  --model_path "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/toy/49/CHECKPOINT/model.pth"  --three_d_norm
 
 
-CUDA_VISIBLE_DEVICES=0 python /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/tools/inference_spdh_toy.py --exp_id 50 --epoch_id 1 --cfg "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_50_spdh_resnet_h.yaml" --syn_test "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn"  --model_path "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/toy/50/CHECKPOINT/model.pth"  --three_d_norm
+#CUDA_VISIBLE_DEVICES=0 python /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/tools/inference_spdh_toy.py --exp_id 50 --epoch_id 1 --cfg "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_50_spdh_resnet_h.yaml" --syn_test "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn"  --model_path "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/toy/50/CHECKPOINT/model.pth"  --three_d_norm --three_d_noise_mu 0.005 --three_d_noise_std 0.002 --three_d_random_drop 2.5e-5
+##
+##
+#CUDA_VISIBLE_DEVICES=0 python /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/tools/inference_spdh_toy.py --exp_id 51 --epoch_id 1 --cfg "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_50_spdh_resnet_h.yaml" --syn_test "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn"  --model_path "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/toy/51/CHECKPOINT/model.pth"  --three_d_norm --three_d_noise_mu 0.005 --three_d_noise_std 0.002 --three_d_random_drop 2.5e-5
 
+CUDA_VISIBLE_DEVICES=0 python /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/tools/inference_spdh_toy.py --exp_id 52 --epoch_id 1 --cfg "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_50_spdh_resnet_h.yaml" --syn_test "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn"  --model_path "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/toy/52/CHECKPOINT/model.pth"  --three_d_norm --three_d_noise_mu1 0.005 --three_d_noise_mu2 0.008 --three_d_noise_mu3 0.03 --three_d_noise_std1 0.005 --three_d_noise_std2 0.015 --three_d_noise_std3 0.04 --three_d_random_drop 2.5e-5 
 
+#CUDA_VISIBLE_DEVICES=0 python /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/tools/inference_spdh_toy.py --exp_id 53 --epoch_id 1 --cfg "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_50_spdh_resnet_h.yaml" --syn_test "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn"  --model_path "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/toy/53/CHECKPOINT/model.pth"  --three_d_norm --three_d_noise_mu 0.008 --three_d_noise_std 0.002 --three_d_random_drop 2.5e-5
 
-
-
-
-
+CUDA_VISIBLE_DEVICES=0 python /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/tools/inference_spdh_toy.py --exp_id 54 --epoch_id 1 --cfg "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/train_50_spdh_resnet_h.yaml" --syn_test "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn"  --model_path "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/toy/54/CHECKPOINT/model.pth"  --three_d_norm --three_d_noise_mu1 0.005 --three_d_noise_mu2 0.008 --three_d_noise_mu3 0.03 --three_d_noise_std1 0.005 --three_d_noise_std2 0.015 --three_d_noise_std3 0.04 --three_d_random_drop 2.5e-5 
 
 
 

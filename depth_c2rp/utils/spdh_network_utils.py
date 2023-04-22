@@ -361,9 +361,15 @@ class SequentialDistributedSampler(torch.utils.data.sampler.Sampler):
         return self.num_samples
  
 
-def distributed_concat(tensor, num_total_examples):
+def distributed_concat(tensor, num_total_examples, dim=0):
     output_tensors = [tensor.clone() for _ in range(torch.distributed.get_world_size())]
     torch.distributed.all_gather(output_tensors, tensor)
-    concat = torch.cat(output_tensors, dim=0)
+    concat = torch.cat(output_tensors, dim=dim)
     # truncate the dummy elements added by SequentialDistributedSampler
-    return concat[:num_total_examples]
+    if dim == 0:
+        return concat[:num_total_examples]
+    elif dim == 1:
+        return concat[:, :num_total_examples]    
+        
+        
+        

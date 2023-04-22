@@ -21,7 +21,7 @@ from torch.utils.data.distributed import DistributedSampler
 from depth_c2rp.DifferentiableRenderer.Kaolin.Renderer import DiffPFDepthRenderer
 from depth_c2rp.datasets.datasets_spdh import Depth_dataset
 from depth_c2rp.build import build_whole_spdh_model
-from depth_c2rp.utils.spdh_utils import load_spdh_model, write_prediction_and_gt, compute_kps_joints_loss
+from depth_c2rp.utils.spdh_utils import load_spdh_model, write_prediction_and_gt, compute_kps_joints_loss, compute_3d_error
 from depth_c2rp.spdh_optimizers import init_optimizer
 from depth_c2rp.utils.analysis import add_from_pose, add_metrics, print_to_screen_and_file, batch_add_from_pose, batch_mAP_from_pose, batch_acc_from_joint_angles, batch_outlier_removal_pose
 from depth_c2rp.utils.spdh_visualize import get_blended_images, get_joint_3d_pred
@@ -86,6 +86,7 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
     joints_3d_gt_lst = []
     pose_gt_lst = []
     kps_gt_lst = []
+    joints_3d_err_lst = []
     
     
     
@@ -217,8 +218,8 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
         pose_gt_lst.append(pose_gt) 
         
         
-        pose_pred = batch_outlier_removal_pose(joints_2d_depth, joints_3d_rob_pred, joints_3d_pred_norm, joints_3d_pred_tensor, (h, w))
-        
+        #pose_pred = batch_outlier_removal_pose(joints_2d_depth, joints_3d_rob_pred, joints_3d_pred_norm, joints_3d_pred_tensor, (h, w))
+        joints_3d_err_lst.append(compute_3d_error(joints_3d_gt-joints_3d_gt[:, :1, :], joints_3d_pred_norm))
         
         # 
         joints_kps_3d_pred = compute_kps_joints_loss(pose_pred[:, :3, :3], pose_pred[:, :3, 3][:, :, None], joints_angle_pred, device)
@@ -260,6 +261,8 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
     
     kps_pred_gather = distributed_concat(torch.cat(kps_pred_lst, dim=0), len(test_sampler.dataset))
     kps_gt_gather = distributed_concat(torch.cat(kps_gt_lst, dim=0), len(test_sampler.dataset))
+    
+    joints_3d_err_gather = distributed_concat(torch.cat(joints_3d_err_lst, dim=1), len(test_sampler.dataset), dim=1)
 
     
 #    if dist.get_rank() == 0:
@@ -273,7 +276,6 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
 #        print("ass_mAP", ass_mAP.shape)
 #        print("angles_acc", angles_acc.shape)
 #        
-        
     
     
     ass_add = ass_add.detach().cpu().numpy().tolist()
@@ -298,6 +300,11 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
     exists_or_mkdir(save_path)
     exists_or_mkdir(results_path)
     exists_or_mkdir(info_path )
+    
+    
+    for b_ in range(joints_3d_err_gather.shape[0]):
+        np.savetxt(os.path.join(info_path, f"{str(b_).zfill(2)}_err.txt"), joints_3d_err_gather[b_].detach().cpu().numpy() * 1000)
+    
     exp_id = cfg["EXP_ID"]
     file_name = os.path.join(results_path, f"EXP{str(exp_id).zfill(2)}_{str(epoch_id).zfill(3)}_{str(dr_iter_num)}.txt")
     prediction_gt_name = os.path.join(info_path, f"EXP{str(exp_id).zfill(2)}_{str(epoch_id).zfill(3)}_{str(dr_iter_num)}.json")

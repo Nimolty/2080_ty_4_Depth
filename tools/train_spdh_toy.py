@@ -36,7 +36,7 @@ from depth_c2rp.utils.utils import load_camera_intrinsics, set_random_seed, exis
 from depth_c2rp.configs.config import update_config
 from depth_c2rp.datasets.datasets_toy import Depth_dataset
 from depth_c2rp.build import build_toy_spdh_model, build_mode_spdh_model
-from depth_c2rp.utils.spdh_utils import load_spdh_model, reduce_mean, save_weights, compute_3n_loss, compute_DX_loss
+from depth_c2rp.utils.spdh_utils import load_spdh_model, reduce_mean, save_weights,compute_DX_loss
 from depth_c2rp.spdh_optimizers import init_toy_optimizer, adapt_lr
 from depth_c2rp.utils.spdh_visualize import get_blended_images, get_joint_3d_pred, log_and_visualize_single
 from depth_c2rp.models.backbones.rest import MLP_TOY
@@ -73,19 +73,25 @@ def main(cfg):
                                      joint_names=[f"panda_joint_3n_{i+1}" for i in range(int(dataset_cfg["NUM_JOINTS"]) // 2)],
                                      run=[0],
                                      init_mode="train", 
-                                     #noise=self.cfg['noise'],
-                                     img_type=dataset_cfg["TYPE"],
-                                     raw_img_size=tuple(dataset_cfg["RAW_RESOLUTION"]),
-                                     input_img_size=tuple(dataset_cfg["INPUT_RESOLUTION"]),
-                                     sigma=dataset_cfg["SIGMA"],
-                                     norm_type=dataset_cfg["NORM_TYPE"],
-                                     network_input=model_cfg["INPUT_TYPE"],
-                                     network_task=model_cfg["TASK"],
-                                     depth_range=dataset_cfg["DEPTH_RANGE"],
-                                     depth_range_type=dataset_cfg["DEPTH_RANGE_TYPE"],
-                                     aug_type=dataset_cfg["AUG_TYPE"],
-                                     aug_mode=dataset_cfg["AUG"])
-                                    
+                                     three_d_norm=cfg["THREE_D_NORM"],
+                                     three_d_noise_mu1=cfg["THREE_D_NOISE_MU1"],
+                                     three_d_noise_mu2=cfg["THREE_D_NOISE_MU2"],
+                                     three_d_noise_mu3=cfg["THREE_D_NOISE_MU3"],
+                                     three_d_noise_std1=cfg["THREE_D_NOISE_STD1"], 
+                                     three_d_noise_std2=cfg["THREE_D_NOISE_STD2"], 
+                                     three_d_noise_std3=cfg["THREE_D_NOISE_STD3"], 
+                                     three_d_random_drop=cfg["THREE_D_RANDOM_DROP"]
+                                     )
+    
+    print("three_d_norm", cfg["THREE_D_NORM"])
+    print("three_d_noise_mu1", cfg["THREE_D_NOISE_MU1"])
+    print("three_d_noise_mu2", cfg["THREE_D_NOISE_MU2"])
+    print("three_d_noise_mu3", cfg["THREE_D_NOISE_MU3"])
+    print("three_d_noise_std1", cfg["THREE_D_NOISE_STD1"])
+    print("three_d_noise_std2", cfg["THREE_D_NOISE_STD2"])
+    print("three_d_noise_std3", cfg["THREE_D_NOISE_STD3"])
+    print("three_d_random_drop", cfg["THREE_D_RANDOM_DROP"])
+    
     training_dataset.train()
     train_sampler = DistributedSampler(training_dataset)
     training_loader = DataLoader(training_dataset, sampler=train_sampler, batch_size=train_cfg["BATCH_SIZE"],
@@ -162,28 +168,22 @@ def main(cfg):
             joints_3d = batch['joints_3D_Z'].to(device).float()
             joints_1d = batch["joints_7"].to(device).float()
 
-            if cfg["TOY_NETWORK"] == "Simple_Net":
-                if cfg["THREE_D_NORM"]:
-                    joints_3d = joints_3d - joints_3d[:, :1, :]
-                if cfg["THREE_D_NOISE"]:
-                    joints_3d_randn = torch.randn_like(joints_3d) # B x N x 3
-                    joints_3d_randn /= torch.norm(joints_3d_randn, dim=-1, keepdim=True)
-                    joints_3d += joints_3d_randn * float(cfg["THREE_D_NOISE"])
-                    
+            if cfg["TOY_NETWORK"] == "Simple_Net":    
                 outputs = model(torch.flatten(joints_3d, 1))
             elif cfg["TOY_NETWORK"] == "Transformer_Net":
                 outputs = model(joints_3d, joints_3d, joints_3d)
             else:
                 raise ValueError
             
-            if loss_cfg["THREE_D_LOSS_TYPE"] == "edm":
-                joints_3d_pred = compute_3n_loss(outputs[:, :, None], joints_1d.device)
-                #print("joints_3d_pred", joints_3d_pred.shape)
-                #print("joints_3d", joints_3d.shape)
-                edm_loss = compute_DX_loss(joints_3d_pred, joints_3d)
-                curr_loss = loss_cfg["Q_WEIGHTS"] * toy_criterion(outputs, joints_1d) + loss_cfg["EDM_WEIGHTS"] * edm_loss
-            else:
-                curr_loss = toy_criterion(outputs, joints_1d)
+#            if loss_cfg["THREE_D_LOSS_TYPE"] == "edm":
+#                joints_3d_pred = compute_3n_loss(outputs[:, :, None], joints_1d.device)
+#                #print("joints_3d_pred", joints_3d_pred.shape)
+#                #print("joints_3d", joints_3d.shape)
+#                edm_loss = compute_DX_loss(joints_3d_pred, joints_3d)
+#                curr_loss = loss_cfg["Q_WEIGHTS"] * toy_criterion(outputs, joints_1d) + loss_cfg["EDM_WEIGHTS"] * edm_loss
+#            else:
+            
+            curr_loss = toy_criterion(outputs, joints_1d)
 
             
             optimizer.zero_grad()
@@ -204,22 +204,9 @@ def main(cfg):
                 else:
                     writer.add_scalar(f'Train/Train Loss', curr_loss.detach().item(), global_iter)
                 writer.add_scalar(f"Train/LR", optimizer.param_groups[0]['lr'], global_iter)
-                   
-#            if batch_idx % visualize_iteration == 0 and dist.get_rank() == 0:
-#                heatmap_pred, joints_3d_pred = get_joint_3d_pred(heatmap_pred, cfg, h, w, c, input_K)
-#                joints_3d_pred = joints_3d_pred[:8]
-#                joints_3d_gt = joints_3d.clone().cpu().numpy()[:8]
-#                gt_images = batch['depthvis'].clone().numpy()[:8]
-#                K = batch['K_depth'].clone().numpy()[:8]
-#                gt_images, pred_images, true_blend_uv, true_blend_uz, pred_blend_uv, pred_blend_uz = get_blended_images(gt_images, K, joints_3d_gt, joints_3d_pred, device, heatmap_pred, heatmap_gt)
-#                gt_results, pred_results = [gt_images], [pred_images]
-#                true_blends_UV, pred_blends_UV = [true_blend_uv], [pred_blend_uv]
-#                true_blends_UZ, pred_blends_UZ = [true_blend_uz], [pred_blend_uz]
-#                log_and_visualize_single(writer, global_iter, gt_results, pred_results,true_blends_UV, pred_blends_UV,true_blends_UZ, pred_blends_UZ)
-            
+                          
             
             global_iter += 1
-            #adapt_lr(optimizer, global_iter, base_lr, max_iters)
                 
 
         # Save Output and Checkpoint
@@ -230,50 +217,7 @@ def main(cfg):
                 save_weights(os.path.join(checkpoint_path, "model.pth"), epoch, global_iter, model, optimizer, scheduler, cfg)
                 if epoch % 5 == 0:
                     save_weights(os.path.join(checkpoint_path, "model_{}.pth".format(str(epoch).zfill(3))), epoch, global_iter, model, optimizer, scheduler, cfg)
-        
-        
-#        # Validation
-#        if epoch % 1 == 0:
-#            with torch.no_grad():
-#                val_sampler.set_epoch(epoch)
-#                model.eval()
-#                val_curr_loss = []
-#                for batch_idx, batch in enumerate(tqdm(val_loader)):
-#                    joints_3d = batch['joints_3D_Z'].to(device).float()
-#                    heatmap_gt = batch['heatmap_25d'].to(device).float()
-#                    input_K = batch['K_depth'].to(device).float()
-#                    input_fx = batch['K_depth'].to(device).float()[:, 0, 0]
-#                    input_fy = batch['K_depth'].to(device).float()[:, 1, 1]
-#                    
-#                    if model_cfg["INPUT_TYPE"] == "XYZ":
-#                        input_tensor = batch['xyz_img'].to(device).float()
-#                    else:
-#                        raise ValueError
-#                    
-#                    outputs = model(input_tensor)
-#                    b, c, h, w = heatmap_gt.size()
-#                    if model_cfg["NAME"] == "stacked_hourglass":
-#                        heatmap_pred = outputs['heatmaps']
-#                        curr_loss = heatmap_criterion((F.interpolate(heatmap_pred[0], (h, w), mode='bicubic',
-#                                                                  align_corners=False) + 1) / 2., heatmap_gt)
-#                        for j in range(1, len(heatmap_pred)):
-#                            curr_loss += heatmap_criterion((F.interpolate(heatmap_pred[j], (h, w), mode='bicubic',
-#                                                                       align_corners=False) + 1) / 2., heatmap_gt)
-#                    elif "dreamhourglass" in model_cfg["NAME"]:
-#                        heatmap_pred = outputs[-1]
-#                        curr_loss = heatmap_criterion((F.interpolate(heatmap_pred, (h, w), mode='bicubic',
-#                                                                  align_corners=False) + 1) / 2., heatmap_gt)
-#                    else:
-#                        raise ValueError
-#                    val_curr_loss.append(curr_loss.detach().item())
-#                if dist.get_rank() == 0:
-#                    writer.add_scalar(f'Validation/Validation Loss', np.mean(val_curr_loss), epoch)
-#                
-#        
-#        # Inference
-#        if epoch % 1 == 0 and dist.get_rank() == 0:  
-#            ass_add_results, ass_mAP_dict = network_inference(model, cfg, epoch, device)
-#            visualize_inference_results(ass_add_results, ass_mAP_dict, writer, epoch)
+
         
         scheduler.step(epoch + 1)
 

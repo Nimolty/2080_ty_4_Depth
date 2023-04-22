@@ -1,0 +1,8 @@
+pyrr==0.10.3
+webcolors==1.12
+einops
+imgaug==0.4.0
+matplotlib==3.2.1
+tensorboard==2.7.0
+tqdm==4.60.0
+transforms3d==0.3.1

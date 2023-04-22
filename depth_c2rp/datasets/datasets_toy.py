@@ -11,6 +11,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 import os
 import copy
+import random
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pyquaternion import Quaternion
@@ -76,11 +77,11 @@ def init_worker(worker_id):
 
 
 class Depth_dataset(Dataset):
-    def __init__(self, train_dataset_dir: Path, val_dataset_dir : Path, joint_names: list, run: list, init_mode: str = 'train', img_type: str = 'D',
-                 raw_img_size: tuple = (640, 360), input_img_size: tuple = (384, 216), sigma: int = 4., norm_type: str = 'mean_std',
-                 network_input: str = 'D', network_output: str = 'H', network_task: str = '3d_RPE',
-                 depth_range: tuple = (500, 3380, 15), depth_range_type: str = 'normal', aug_type: str = '3d',
-                 aug_mode: bool = True, noise: bool = False, demo: bool = False):
+    def __init__(self, train_dataset_dir: Path, val_dataset_dir : Path, joint_names: list, run: list, init_mode: str = 'train', \
+                three_d_norm : bool = False, three_d_noise_mu1 : float = 0.0, three_d_noise_mu2 : float = 0.0, three_d_noise_mu3 : float = 0.0, \
+                three_d_noise_std1 : float = 0.0, three_d_noise_std2 : float = 0.0, three_d_noise_std3 : float = 0.0, \
+                three_d_random_drop : float = 0.0
+                ):
         """Load Baxter robot synthetic dataset
 
         Parameters
@@ -121,25 +122,23 @@ class Depth_dataset(Dataset):
         self.train_dataset_dir = Path(train_dataset_dir)
         self.val_dataset_dir = Path(val_dataset_dir)
         self.JOINT_NAMES = joint_names
-        #self.JOINT_INFOS = joint_infos
-        #self.KEYPOINTS_NAMES = keypoints_names
         self.run = run
         self._mode = init_mode
-        self.img_type = img_type
-        self.raw_img_size = raw_img_size
-        self.input_img_size = input_img_size
-        self.sigma = sigma
-        self.norm_type = norm_type
-        self.network_input = network_input
-        self.network_output = network_output
-        self.depth_range = depth_range
-        self.depth_range_type = depth_range_type
-        self.network_task = network_task
-        self.aug_type = aug_type
-        self._aug_mode = aug_mode
-        self.aug_mode = aug_mode
-        self.noise = noise
-        self.demo = demo
+        self._aug_mode=True
+        
+        self.three_d_norm = three_d_norm
+        self.three_d_noise_mu1 = three_d_noise_mu1
+        self.three_d_noise_mu2 = three_d_noise_mu2
+        self.three_d_noise_mu3 = three_d_noise_mu3
+        
+        self.three_d_noise_std1 = three_d_noise_std1
+        self.three_d_noise_std2 = three_d_noise_std2
+        self.three_d_noise_std3 = three_d_noise_std3
+        
+        self.three_d_random_drop = three_d_random_drop
+        
+       
+        
         self.data = self.load_data()
 
     def __len__(self):
@@ -149,10 +148,39 @@ class Depth_dataset(Dataset):
         sample = self.data[self.mode][idx].copy()
         # image loading (depth and/or RGB)
         joints_3D_Z = np.zeros((sample['joints'].shape[0], 3))
-        #print("sample_joints_3d", sample["joints"]) 
         for n, joint in enumerate(sample["joints"]):
             point3d = np.asarray([joint[0], joint[1], joint[2]]) # right handed reference frame
             joints_3D_Z[n] = point3d.copy()
+        
+        if self.three_d_norm:
+            joints_3D_Z = joints_3D_Z - joints_3D_Z[:1, :]
+        
+        noise_mu = np.zeros_like(joints_3D_Z)
+        
+        # for the 9 kps, they have lower mean and std
+        noise_mu[:9] = self.three_d_noise_mu1
+        noise_mu[9:13] = self.three_d_noise_mu2
+        noise_mu[-1] = self.three_d_noise_mu3
+        
+        noise_std = np.zeros_like(joints_3D_Z)
+        noise_std[:9] = self.three_d_noise_std1
+        noise_std[9:13] = self.three_d_noise_std2
+        noise_std[-1] = self.three_d_noise_std3
+        
+        noise = np.random.randn(joints_3D_Z.shape[0], joints_3D_Z.shape[1]) * noise_std + noise_mu * (np.random.randint(0, 2, joints_3D_Z.shape) * 2 - 1)
+        # root has no noise
+        noise[0] = 0
+        
+        joints_3D_Z += noise
+            #print(noise)
+        
+        if self.three_d_random_drop:
+            if np.random.random() < self.three_d_random_drop:
+                N = sample["joints"].shape[0]
+                ind = random.choice([i for i in range(N-6, N)])
+                joints_3D_Z[ind] = 0.0
+            else:
+                pass
         
         output = {'joints_3D_Z': joints_3D_Z, "joints_7" : np.array(sample["joints_7"])}
         return output
@@ -200,29 +228,18 @@ class Depth_dataset(Dataset):
                 with open(joints_file, 'r') as fd:
                     json_data = json.load(fd)[0]
                 json_keypoints_data = json_data["keypoints"]
-                #json_joints_data = json_data["joints"]
-                json_joints_data = json_data["joints_3n_fixed"]
+                json_joints_data = json_data["joints_3n_fixed_42"]
                 json_joints_7_data = json_data["joints"]
                 joints_7_pos = [kp["position"] for idx, kp in enumerate(json_joints_7_data) if idx != len(json_joints_7_data)-1] 
                 
                 keypoints_r2c_data = [json_keypoints_data[idx]["R2C_mat"] for idx in range(len(json_keypoints_data))]
                 joints_loc_wrt_cam_data = [json_joints_data[idx]["location_wrt_cam"] for idx in range(len(json_joints_data))]
                 assert len(self.JOINT_NAMES) == len(joints_loc_wrt_cam_data)
-                #print("length of joints kps", len(joints_loc_wrt_cam_data))
-                
-#                assert "panda_finger_joint2" == json_keypoints_data[-1]["Name"]
-#                last_wrt_cam = json_keypoints_data[-1]["location_wrt_cam"]
-#                joints_loc_wrt_cam_data.append(last_wrt_cam)
-#                assert len(self.JOINT_NAMES) == len(joints_loc_wrt_cam_data)
+
                 
                 joints_pos = np.zeros((len(self.JOINT_NAMES), 3), dtype=np.float32)
                 for idx, k in enumerate(self.JOINT_NAMES):
-#                    joint_info = JOINT_INFOS[k]
-#                    kp_id = joint_info["base"]
-#                    r2c_mat = keypoints_r2c_data[kp_id]
-#                    r2c_mat_np = np.asarray(r2c_mat)
                     loc_wrt_cam = joints_loc_wrt_cam_data[idx]
-#                    q = Quaternion(matrix=r2c_mat_np)
                     joints_pos[idx] = [loc_wrt_cam[0], 
                                        loc_wrt_cam[1],
                                        loc_wrt_cam[2],] 

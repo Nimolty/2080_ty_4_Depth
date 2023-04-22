@@ -41,17 +41,23 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
                                      joint_names=[f"panda_joint_3n_{i+1}" for i in range(int(dataset_cfg["NUM_JOINTS"]) // 2)],
                                      run=[0],
                                      init_mode="train", 
-                                     img_type=dataset_cfg["TYPE"],
-                                     raw_img_size=tuple(dataset_cfg["RAW_RESOLUTION"]),
-                                     input_img_size=tuple(dataset_cfg["INPUT_RESOLUTION"]),
-                                     sigma=dataset_cfg["SIGMA"],
-                                     norm_type=dataset_cfg["NORM_TYPE"],
-                                     network_input=model_cfg["INPUT_TYPE"],
-                                     network_task=model_cfg["TASK"],
-                                     depth_range=dataset_cfg["DEPTH_RANGE"],
-                                     depth_range_type=dataset_cfg["DEPTH_RANGE_TYPE"],
-                                     aug_type=dataset_cfg["AUG_TYPE"],
-                                     aug_mode=dataset_cfg["AUG"])
+                                     three_d_norm=cfg["THREE_D_NORM"],
+                                     three_d_noise_mu1=cfg["THREE_D_NOISE_MU1"],
+                                     three_d_noise_mu2=cfg["THREE_D_NOISE_MU2"],
+                                     three_d_noise_mu3=cfg["THREE_D_NOISE_MU3"],
+                                     three_d_noise_std1=cfg["THREE_D_NOISE_STD1"], 
+                                     three_d_noise_std2=cfg["THREE_D_NOISE_STD2"], 
+                                     three_d_noise_std3=cfg["THREE_D_NOISE_STD3"], 
+                                     three_d_random_drop=cfg["THREE_D_RANDOM_DROP"]
+                                     )
+    print("three_d_norm", cfg["THREE_D_NORM"])
+    print("three_d_noise_mu1", cfg["THREE_D_NOISE_MU1"])
+    print("three_d_noise_mu2", cfg["THREE_D_NOISE_MU2"])
+    print("three_d_noise_mu3", cfg["THREE_D_NOISE_MU3"])
+    print("three_d_noise_std1", cfg["THREE_D_NOISE_STD1"])
+    print("three_d_noise_std2", cfg["THREE_D_NOISE_STD2"])
+    print("three_d_noise_std3", cfg["THREE_D_NOISE_STD3"])
+    print("three_d_random_drop", cfg["THREE_D_RANDOM_DROP"])
                                    
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=eval_cfg["BATCH_SIZE"], shuffle=True, \
                                                num_workers=int(eval_cfg["NUM_WORKERS"]), pin_memory=True, drop_last=False)
@@ -78,9 +84,6 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
 #                break
             joints_3d = batch['joints_3D_Z'].to(device).float()
             joints_1d_gt = batch["joints_7"].to(device).float()
-             
-            if cfg["THREE_D_NORM"]:
-                joints_3d = joints_3d - joints_3d[:, :1, :] 
                          
             joints_1d_pred = model(torch.flatten(joints_3d, 1))
             loss += torch.mean(torch.abs(joints_1d_pred - joints_1d_gt), dim=0)

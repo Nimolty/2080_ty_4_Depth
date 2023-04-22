@@ -38,7 +38,7 @@ DATASET:
 
 TRAIN:
   BATCH_SIZE    : 3600            # batch size used to train
-  EPOCHS        : 500             # number of epochs to train
+  EPOCHS        : 5500             # number of epochs to train
   EVAL_INTERVAL : 10              # evaluation interval during training
   AMP           : false           # use AMP in training
   DDP           : false           # use DDP training

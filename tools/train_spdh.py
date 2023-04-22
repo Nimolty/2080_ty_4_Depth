@@ -158,8 +158,8 @@ def main(cfg):
         train_sampler.set_epoch(epoch)
         model.train()
         for batch_idx, batch in enumerate(tqdm(training_loader)):
-            if batch_idx >= 0:
-                break 
+#            if batch_idx >= 0:
+#                break 
             t1 = time.time()
             joints_3d = batch['joints_3D_Z'].to(device).float()
             #print(batch['joints_3D_Z'])

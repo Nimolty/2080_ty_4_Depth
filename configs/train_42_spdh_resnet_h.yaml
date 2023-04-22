@@ -13,7 +13,7 @@ DATASET:
   NAME          : HELEN                                               # dataset name to be trained with (camvid, cityscapes, ade20k)
   TRAINING_ROOT : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"     
   VAL_ROOT      : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"   # dataset root path
-  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
+  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn/"             
   #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Small_Testing_Data_0115/"  
   #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Test_Data_0115/"  
   #TESTING ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             

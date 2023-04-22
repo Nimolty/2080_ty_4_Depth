@@ -69,7 +69,7 @@ def batch_acc_from_joint_angles(dt_joints_pos, gt_joints_pos, thresholds):
     # dt_joitns_pos, gt_joints_pos : B x 8 x 1
     this_acc = []
     #dist_angles = np.abs(dt_joints_pos,gt_joints_pos)[:, :-1, 0] # B x 7 Find the bug！
-    dist_angles = np.abs(dt_joints_pos - gt_joints_pos) # B x 7
+    dist_angles = np.abs(dt_joints_pos - gt_joints_pos)#[:, :, 0] # B x   
     #print("dist_angles", dist_angles)
     for thresh in thresholds:
         radian_thresh = math.radians(thresh)

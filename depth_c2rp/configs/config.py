@@ -17,8 +17,16 @@ def update_config():
     parser.add_argument("--model_path", type=str,default="")
     parser.add_argument("--syn_test", type=str,default="")
     parser.add_argument("--toy_network",type=str,default="Simple_Net")
+    
     parser.add_argument("--three_d_norm", action="store_true")
-    parser.add_argument("--three_d_noise", type=str,default="")
+    parser.add_argument("--three_d_noise_mu1", type=float, default=0.0)
+    parser.add_argument("--three_d_noise_mu2", type=float, default=0.0)
+    parser.add_argument("--three_d_noise_mu3", type=float, default=0.0)
+    parser.add_argument("--three_d_noise_std1", type=float, default=0.0)
+    parser.add_argument("--three_d_noise_std2", type=float, default=0.0)
+    parser.add_argument("--three_d_noise_std3", type=float, default=0.0)
+    parser.add_argument("--three_d_random_drop", type=float, default=0.0)
+    
     parser.add_argument("--trained_spdh_net_path", type=str, default="")
     parser.add_argument("--trained_simple_net_path", type=str, default="")
     parser.add_argument("--load_mask", action="store_true")
@@ -40,8 +48,16 @@ def update_config():
     cfg["MODEL_PATH"] = args.model_path
     cfg["SYN_TEST"] = args.syn_test
     cfg["TOY_NETWORK"] = args.toy_network
+    
     cfg["THREE_D_NORM"] = args.three_d_norm
-    cfg["THREE_D_NOISE"] = args.three_d_noise
+    cfg["THREE_D_NOISE_MU1"] = args.three_d_noise_mu1
+    cfg["THREE_D_NOISE_MU2"] = args.three_d_noise_mu2
+    cfg["THREE_D_NOISE_MU3"] = args.three_d_noise_mu3
+    cfg["THREE_D_NOISE_STD1"] = args.three_d_noise_std1
+    cfg["THREE_D_NOISE_STD2"] = args.three_d_noise_std2
+    cfg["THREE_D_NOISE_STD3"] = args.three_d_noise_std3
+    cfg["THREE_D_RANDOM_DROP"] = args.three_d_random_drop
+    
     cfg["TRAINED_SPDH_NET_PATH"] = args.trained_spdh_net_path
     cfg["TRAINED_SIMPLE_NET_PATH"] = args.trained_simple_net_path
     cfg["LOAD_MASK"] = args.load_mask

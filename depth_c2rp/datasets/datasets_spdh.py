@@ -18,12 +18,6 @@ from pyquaternion import Quaternion
 import glob
 os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"
 
-#from utils.data_augmentation import augment_3d
-#from utils.depth_utils import depthmap2pointcloud
-#from utils.depth_utils import depthmap2points
-#from utils.depth_utils import overlay_points_on_image, mosaic_images
-#from utils.preprocessing import apply_depth_normalization_16bit_image
-#from utils.utils import heatmap_from_kpoints_array, gkern
 from depth_c2rp.utils.spdh_utils import augment_3d, depthmap2pointcloud, depthmap2points, overlay_points_on_image, mosaic_images
 from depth_c2rp.utils.spdh_utils import apply_depth_normalization_16bit_image, heatmap_from_kpoints_array, gkern, compute_rigid_transform
 
