@@ -23,13 +23,7 @@ from torch.utils.data import (DataLoader, Dataset)
 from torch.nn import functional as F
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
-#from depth_c2rp.models.heads import FaPNHead 
-#from depth_c2rp.models.backbones import ResNet
-#from depth_c2rp.losses_o6d import get_loss, Calculate_Loss
-#from depth_c2rp.utils.utils import save_model, load_model, exists_or_mkdir, visualize_training_loss, find_seq_data_in_dir, visualize_training_masks, visualize_inference_results
-#from depth_c2rp.utils.utils import check_input, visualize_validation_loss, load_camera_intrinsics, visualize_training_lr, set_random_seed
-#from depth_c2rp.configs.config import update_config
-#from depth_c2rp.utils.image_proc import get_nrm
+
 
 # spdh
 from depth_c2rp.utils.utils import load_camera_intrinsics, set_random_seed, exists_or_mkdir, visualize_inference_results
@@ -89,7 +83,7 @@ def main(cfg):
     training_dataset.train()
     train_sampler = DistributedSampler(training_dataset)
     training_loader = DataLoader(training_dataset, sampler=train_sampler, batch_size=train_cfg["BATCH_SIZE"],
-                                  num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=True)
+                                  num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=True) 
     
     
     val_dataset = copy.copy(training_dataset)  
@@ -119,9 +113,9 @@ def main(cfg):
     model = model.to(device)
     num_gpus = torch.cuda.device_count()
     print("device", device)
-    if num_gpus > 1:
-        print('use {} gpus!'.format(num_gpus))
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[cfg["LOCAL_RANK"]],
+    #if num_gpus > 1:
+    print('use {} gpus!'.format(num_gpus))
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[cfg["LOCAL_RANK"]],
                                                 output_device=cfg["LOCAL_RANK"],find_unused_parameters=False)
     
     # Build Opimizer
@@ -158,8 +152,8 @@ def main(cfg):
         train_sampler.set_epoch(epoch)
         model.train()
         for batch_idx, batch in enumerate(tqdm(training_loader)):
-#            if batch_idx >= 0:
-#                break 
+            if batch_idx >= 0:
+                break 
             t1 = time.time()
             joints_3d = batch['joints_3D_Z'].to(device).float()
             #print(batch['joints_3D_Z'])

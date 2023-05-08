@@ -20,7 +20,7 @@ from depth_c2rp.models.layers import *
 from depth_c2rp.utils.utils import load_pretrained
 from depth_c2rp.utils.spdh_network_utils import MLP_TOY, compute_rigid_transform, SoftArgmaxPavlo, SpatialSoftArgmax, SpatialSoftArgmax2d
 from depth_c2rp.models.layers.toy_layer import TransformerEncoder, TransformerEncoderLayer
-from depth_c2rp.utils.spdh_utils import compute_3n_loss_40, compute_3n_loss_39, compute_3n_loss_42
+from depth_c2rp.utils.spdh_utils import compute_3n_loss_40, compute_3n_loss_39, compute_3n_loss_42_rob
 from depth_c2rp.utils.spdh_sac_utils import compute_rede_rt
 
 
@@ -41,7 +41,7 @@ class build_spdh_train_network(nn.Module):
         self.cfg = cfg
         self.joints_3d_pred = torch.ones(1, self.cfg["DATASET"]["NUM_JOINTS"]//2, 3)
     
-    def forward(self, _input, cam_params, joints_1d_gt=None):
+    def forward(self, _input, cam_params, joints_1d_gt=None, idx=None):
 #        start = torch.cuda.Event(enable_timing=True)
 #        end = torch.cuda.Event(enable_timing=True)
 #        
@@ -53,30 +53,31 @@ class build_spdh_train_network(nn.Module):
         
         # heatmap_pred : B x C x H x W
         B, C, H, W = heatmap_pred.shape
+
         # use softargmax to get xyz
         joints_3d_pred = self.joints_3d_pred.to(input_K.device).repeat(B, 1, 1)
         uv_pred = self.softargmax_uv(heatmap_pred[:, :C//2, :, :]) # B x C//2 x 2        
-        z_pred = self.softargmax_uz(heatmap_pred[:, C//2:, :, :])[:,:, 1:2]  # B x C//2 x 1
+        z_pred_1000 = self.softargmax_uz(heatmap_pred[:, C//2:, :, :])[:,:, 1:2]  # B x C//2 x 1
         
         joints_3d_pred[:, :, :2] = uv_pred
         Z_min, _, dZ = self.cfg["DATASET"]["DEPTH_RANGE"]
-        z_pred = ((z_pred * dZ) + Z_min) / 1000
+        z_pred = ((z_pred_1000 * dZ) + Z_min) / 1000
         inv_intrinsic = torch.inverse(input_K).unsqueeze(1).repeat(1,
                                                                C//2,
                                                                1,
                                                                1)
-        joints_3d_pred = (inv_intrinsic @ joints_3d_pred[:, :, :, None]).squeeze(-1)
+        joints_3d_pred = (inv_intrinsic @ joints_3d_pred[:, :, :, None]).squeeze(-1) 
         joints_3d_pred *= z_pred # B x C//2 x 3
         joints_3d_pred_norm = joints_3d_pred - joints_3d_pred[:, :1, :].clone() # Normalization
 
         # predict joints angle
-        joints_angle_pred = self.simplenet(torch.flatten(joints_3d_pred_norm, 1)) # B x 7
+        joints_angle_pred = self.simplenet(torch.flatten(joints_3d_pred_norm, 1)) # B x 7  
 
         # predict R and T using pose fitting
         all_dof_pred = joints_angle_pred[:, :, None] # B x 7 x 1
 #        if joints_1d_gt is not None: 
-#            all_dof_pred = joints_1d_gt
-        joints_3d_rob_pred = compute_3n_loss_42(all_dof_pred, input_K.device)
+#            all_dof_pred = joints_1d_gt   
+        joints_3d_rob_pred = compute_3n_loss_42_rob(all_dof_pred, input_K.device)
         
 #        pose_pred = compute_rigid_transform(joints_3d_rob_pred[:, :18, :], joints_3d_pred_norm[:, :18, :])
 #        #print(pose_pred)
@@ -88,7 +89,7 @@ class build_spdh_train_network(nn.Module):
         for b in range(B):
             pose_pred_clone.append(compute_rede_rt(joints_3d_rob_pred[b:b+1, :, :], joints_3d_pred_norm[b:b+1, :, :]))
         pose_pred_clone = torch.cat(pose_pred_clone)
-        pose_pred_clone[:, :3, 3] = joints_3d_pred[:, 0] + pose_pred_clone[:, :3, 3]
+        pose_pred_clone[:, :3, 3] = joints_3d_pred[:, 0] + pose_pred_clone[:, :3, 3] 
 
 #        end.record()
 #  
@@ -101,7 +102,7 @@ class build_spdh_train_network(nn.Module):
 #        
 #        
 #        
-        return heatmap_pred, all_dof_pred, pose_pred_clone, joints_3d_rob_pred, joints_3d_pred_norm, joints_3d_pred
+        return heatmap_pred, all_dof_pred, pose_pred_clone, joints_3d_rob_pred, joints_3d_pred_norm, joints_3d_pred, uv_pred, z_pred_1000
 
 class build_spdh_test_network(nn.Module):
     def __init__(self, backbone, simplenet, cfg, device=torch.device("cpu")):

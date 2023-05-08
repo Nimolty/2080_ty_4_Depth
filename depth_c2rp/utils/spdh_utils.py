@@ -165,7 +165,7 @@ def pixel2world(x, y, z, img_width, img_height, fx, fy, cx=None, cy=None):
     if cy is None:
         cy = img_height / 2
     w_x = (x - cx) * z / fx
-    w_y = (cy - y) * z / fy
+    w_y = (y - cy) * z / fy # right-handed axis !!!
     w_z = z
     return w_x, w_y, w_z
 
@@ -176,7 +176,7 @@ def world2pixel(x, y, z, img_width, img_height, fx, fy, cx=None, cy=None):
     if cy is None:
         cy = img_height / 2
     p_x = x * fx / z + cx
-    p_y = cy - y * fy / z
+    p_y = cy + y * fy / z # right-handed axis !!!
     return p_x, p_y
 
 
@@ -800,7 +800,89 @@ def _axis_angle_rotation(axis: str, angle: torch.Tensor) -> torch.Tensor:
 
     return torch.stack(R_flat, -1).reshape(angle.shape + (3, 3))
 
-def compute_3n_loss_42(Angles, device=torch.device("cpu")):
+def compute_3n_loss_42_rob(Angles, device=torch.device("cpu")):
+    # R : B x 3 x 3
+    # T : B x 3 x 1
+    # Angles : B x N
+    B, M, _ = Angles.shape
+    ori_trans_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.333], [0.0,0.0,0.0],\
+                                        [0.0,-0.316,0.0], [0.0825,0.0,0.0],[-0.0825,0.384,0.0],\
+                                        [0.0,0.0,0.0], [0.088,0.0,0.0],[0.0,0.0,0.107],\
+                                        [0.0,0.0,0.0584], [0.0,0.0,0.0]
+                                        ])).float().to(device)
+    ori_angles_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+              [1.5707963267948966,0.0,0.0], [1.5707963267948966,0.0,0.0], [-1.5707963267948966,0.0,0.0],\
+               [1.5707963267948966,0.0,0.0],  [1.5707963267948966,0.0,0.0], [0.0,0.0,-1.5707963267948966/2],\
+               [0.0,0.0,0.0], [0.0,0.0,0.0]
+                                        ])).float().to(device)    
+    
+    joints_info = [
+              # base and plus 3 pts
+              {"base" : 0, "offset" : [0.0, 0.0, 0.0]},
+              {"base" : 0, "offset" : [0.0, 0.0, 0.14]}, # panda_joint1
+              {"base" : 0, "offset" : [-0.11, 0.0, 0.0]},
+              
+              
+              {"base" : 1, "offset" : [0.0, 0.0, 0.0]}, # panda_joint2
+              {"base" : 1, "offset" : [0.0, -0.1294, -0.0]}, 
+              
+              
+              {"base" : 2, "offset" : [0.0, -0.1940, 0.0]}, # panda_joint3 
+              
+              {"base" : 4, "offset" : [0.0, 0.0, 0.0]},
+              {"base" : 4, "offset" : [0.0, 0.0, 0.1111]},
+              {"base" : 4, "offset" : [0.0, 0.1240, 0.0]},
+              
+              
+              {"base" : 5, "offset" : [0.0, 0.1299, 0.0]},
+              
+              
+              {"base" :6, "offset" : [0.0, 0.0, 0.0583]},
+              {"base" :6, "offset" : [0.088, 0.0, 0.0]}, 
+              
+              {"base" : 7, "offset" : [0.0, 0.0, 0.1520]},
+              {"base" : 7, "offset" : [0.06, 0.06, 0.1520]}
+              ]
+    ori_mat = torch.eye(3).repeat(B,1).reshape(B,3,3).float().to(device)
+    ori_trans = torch.zeros(B, 3, 1).float().to(device)
+    ori_angles = euler_angles_to_matrix(ori_angles_list, convention="XYZ")
+    
+    
+    kps_list, R2C_list = [], []
+    for j in range(11):
+        if j == 0:
+            kps_list.append(ori_trans.clone())
+            R2C_list.append(ori_mat.clone())
+            continue
+        this_mat = ori_angles[j].repeat(B, 1).reshape(B, 3, 3)
+        trans = ori_trans_list[j].unsqueeze(0).repeat(B, 1)
+        if 1 <= j <= 7:
+            new_mat = _axis_angle_rotation("Z", Angles[:, j-1, 0])
+            #print("this_mat.shape", this_mat.shape)
+            #print("new_mat.shape", new_mat.shape)
+            this_mat = torch.bmm(this_mat, new_mat)
+#        if j == 9:
+#            trans = trans + Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+#        if j == 10:
+#            trans = trans + (-2) * Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+         
+         
+        ori_trans += torch.bmm(ori_mat, trans.unsqueeze(2))
+        ori_mat = torch.bmm(ori_mat, this_mat)
+        kps_list.append(ori_trans.float().clone())
+        R2C_list.append(ori_mat.float().clone())
+        
+    N = len(joints_info)    
+    joints_x3d_rob = torch.zeros(B, N, 3, 1).to(device)
+    for idx in range(len(joints_info)):
+        base_idx, offset = joints_info[idx]["base"], torch.from_numpy(np.array(joints_info[idx]["offset"]))[None, :, None].repeat(B, 1, 1).to(device)
+        this_x3d = torch.bmm(R2C_list[base_idx], offset.float()) + kps_list[base_idx]
+        joints_x3d_rob[:, idx, :, :] = this_x3d.clone()
+    
+    joints_x3d_rob = joints_x3d_rob.squeeze(3)
+    return joints_x3d_rob
+
+def compute_3n_loss_42_cam(R, T, Angles, device=torch.device("cpu")):
     # R : B x 3 x 3
     # T : B x 3 x 1
     # Angles : B x N
@@ -906,16 +988,18 @@ def compute_3n_loss_42(Angles, device=torch.device("cpu")):
             #print("this_mat.shape", this_mat.shape)
             #print("new_mat.shape", new_mat.shape)
             this_mat = torch.bmm(this_mat, new_mat)
-        if j == 9:
-            trans = trans + Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
-        if j == 10:
-            trans = trans + (-2) * Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+#        if j == 9:
+#            trans = trans + Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
+#        if j == 10:
+#            trans = trans + (-2) * Angles[:, -1:,0] * (torch.tensor([[0.0, 1.0, 0.0]]).to(device)).repeat(B,1)
          
          
         ori_trans += torch.bmm(ori_mat, trans.unsqueeze(2))
         ori_mat = torch.bmm(ori_mat, this_mat)
         kps_list.append(ori_trans.float().clone())
         R2C_list.append(ori_mat.float().clone())
+
+
         
     N = len(joints_info)    
     joints_x3d_rob = torch.zeros(B, N, 3, 1).to(device)
@@ -925,8 +1009,9 @@ def compute_3n_loss_42(Angles, device=torch.device("cpu")):
         joints_x3d_rob[:, idx, :, :] = this_x3d.clone()
     
     joints_x3d_rob = joints_x3d_rob.squeeze(3)
-    
-    return joints_x3d_rob
+    joints_x3d_cam= torch.bmm(R, joints_x3d_rob.permute(0, 2, 1).contiguous()) + T
+    return joints_x3d_cam.permute(0,2,1).contiguous()  
+
     
 def compute_3n_loss_39(Angles, device=torch.device("cpu")): 
     # R : B x 3 x 3
@@ -1367,7 +1452,17 @@ def load_prediction_and_gt(path_meta):
 def compute_3d_error(joints_3d_gt_norm, joints_3d_pred_norm):
     # joints_3d_pred_norm : B x num_kps x 3
     
-    return joints_3d_pred_norm.permute(1, 0, 2) - joints_3d_gt_norm.permute(1, 0, 2)
+    return joints_3d_pred_norm.permute(1, 0, 2) - joints_3d_gt_norm.permute(1, 0, 2) 
+
+def get_peak_pts(pred_uv, input_xyz, threshold=0.5):  
+    # input_xyz : B x 3 x H x W
+    # pred_uv : B x N x H x W (Denote the threshold)
+    mask = (pred_uv > threshold)
+    mask = torch.sum(mask, dim=1) # B x H x W
+    mask = (mask > 0.0).unsqueeze(3) # B x H x W x 1
+    return input_xyz.permute(0, 2, 3, 1) * mask # B x H x W x 3    
+    
+    
 
 
 

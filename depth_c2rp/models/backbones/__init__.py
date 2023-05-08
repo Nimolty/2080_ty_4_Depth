@@ -4,7 +4,7 @@ from .convnext import ConvNeXt
 from .poolformer import PoolFormer
 from .stacked_hourglass import HourglassNet
 from .hrnet import HRNet
-from .dream_hourglass import ResnetSimple, DreamHourglass
+from .dream_hourglass import ResnetSimple, DreamHourglass, ResnetSimpleWoff
 __all__ = [
-    'ResNet', "ResT", "ConvNeXt", "PoolFormer", "HourglassNet", "HRNet", "ResnetSimple", "DreamHourglass"
+    'ResNet', "ResT", "ConvNeXt", "PoolFormer", "HourglassNet", "HRNet", "ResnetSimple", "DreamHourglass", "ResnetSimpleWoff"
 ]

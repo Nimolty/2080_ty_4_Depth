@@ -18,7 +18,76 @@ from torch.nn.parameter import Parameter
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # This code is adapted from
 # https://gitlab-master.nvidia.com/pmolchanov/lpr-3d-hand-pose-rgb-demo/blob/master/handpose/models/image_heatmaps_pose2dZrel_softargmax_slim.py
+class SpatialSoftArgmax(nn.Module):
+    """
+    The spatial softmax of each feature
+    map is used to compute a weighted mean of the pixel
+    locations, effectively performing a soft arg-max
+    over the feature dimension.
 
+    """
+
+    def __init__(self, normalize=True):
+        """Constructor.
+        Args:
+            normalize (bool): Whether to use normalized
+                image coordinates, i.e. coordinates in
+                the range `[-1, 1]`.
+        """
+        super().__init__()
+
+        self.normalize = normalize
+        self.beta = 25.0
+
+    def _coord_grid(self, h, w, device):
+        if self.normalize:
+            return torch.stack(
+                torch.meshgrid(
+                    torch.linspace(-1, 1, h, device=device),
+                    torch.linspace(-1, 1, w, device=device),
+                    #indexing='ij',
+                )
+            )
+        return torch.stack(
+            torch.meshgrid(
+                torch.arange(0, h, device=device),
+                torch.arange(0, w, device=device),
+                #indexing='ij',
+            )
+        )
+
+    def forward(self, x):
+        assert x.ndim == 4, "Expecting a tensor of shape (B, C, H, W)."
+
+        # compute a spatial softmax over the input:
+        # given an input of shape (B, C, H, W),
+        # reshape it to (B*C, H*W) then apply
+        # the softmax operator over the last dimension
+#        torch.cuda.synchronize() 
+#        t1 = time.time()
+        b, c, h, w = x.shape
+        softmax = F.softmax(x.reshape(-1, h * w) * self.beta, dim=-1)
+        #print("softmax", softmax)
+
+        # create a meshgrid of pixel coordinates
+        # both in the x and y axes
+        yc, xc = self._coord_grid(h, w, x.device)
+
+        # element-wise multiply the x and y coordinates
+        # with the softmax, then sum over the h*w dimension
+        # this effectively computes the weighted mean of x
+        # and y locations
+        x_mean = (softmax * xc.flatten()).sum(dim=1, keepdims=True)
+        y_mean = (softmax * yc.flatten()).sum(dim=1, keepdims=True)
+#        torch.cuda.synchronize() 
+#        t2 = time.time()
+#        print("t2 - t1", t2 - t1)
+
+        # concatenate and reshape the result
+        # to (B, C, 2) where for every feature
+        # we have the expected x and y pixel
+        # locations
+        return torch.cat([x_mean, y_mean], dim=1).view(-1, c, 2)
 
 class SoftArgmaxPavlo(torch.nn.Module):
     def __init__(self, n_keypoints=5, learned_beta=False, initial_beta=25.0):
@@ -243,6 +312,210 @@ class ResnetSimple(nn.Module):
 
         return [x]
 
+class ResnetSimpleWoff(nn.Module):
+    def __init__(
+        self, n_keypoints=7, n_offs = 4, freeze=False, pretrained=True, full=False, 
+    ):
+        super(ResnetSimpleWoff, self).__init__()
+        net = tviz_models.resnet101(pretrained=pretrained)
+        self.full = full
+        #self.conv1 = net.conv1
+#        self.conv1 = nn.Conv2d(in_channels=6, out_channels=64, kernel_size=7, stride=2, padding=3) 
+#        self.bn1 = net.bn1
+#        self.relu = net.relu
+#        self.maxpool = net.maxpool
+#
+#        self.layer1 = net.layer1
+#        self.layer2 = net.layer2
+#        self.layer3 = net.layer3
+#        self.layer4 = net.layer4
+        
+        self.feat_extractor = nn.Sequential(
+                              net.conv1,
+                              net.bn1,
+                              net.relu,
+                              net.maxpool,
+                              net.layer1,         
+                              net.layer2,
+                              net.layer3,
+                              net.layer4,
+                              )
+
+        # upconvolution and final layer
+        BN_MOMENTUM = 0.1
+        if not full:
+            self.upsample = nn.Sequential(
+                nn.ConvTranspose2d(
+                    in_channels=2048,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+                nn.ConvTranspose2d(
+                    in_channels=256,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+                nn.ConvTranspose2d(
+                    in_channels=256,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+                nn.ConvTranspose2d(
+                    in_channels=256,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(256, n_keypoints, kernel_size=1, stride=1),
+            )
+            
+            self.upsample_woff = nn.Sequential(
+                nn.ConvTranspose2d(
+                    in_channels=2048,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+                nn.ConvTranspose2d(
+                    in_channels=256,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+                nn.ConvTranspose2d(
+                    in_channels=256,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+                nn.ConvTranspose2d(
+                    in_channels=256,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(256, n_offs, kernel_size=1, stride=1),
+            )
+        else:
+            self.upsample = nn.Sequential(
+                nn.ConvTranspose2d(
+                    in_channels=2048,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+                nn.ConvTranspose2d(
+                    in_channels=256,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+                nn.ConvTranspose2d(
+                    in_channels=256,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+                nn.ConvTranspose2d(
+                    in_channels=256,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+            )
+            # This brings it up from 208x208 to 416x416
+            self.upsample2 = nn.Sequential(
+                nn.ConvTranspose2d(
+                    in_channels=256,
+                    out_channels=256,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    output_padding=0,
+                ),
+                nn.BatchNorm2d(256, momentum=BN_MOMENTUM),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(256, n_keypoints, kernel_size=1, stride=1),
+            )
+
+    def forward(self, x):
+
+#        x = self.conv1(x)
+#        x = self.bn1(x)
+#        x = self.relu(x)
+#        x = self.maxpool(x)
+#
+#        x = self.layer1(x)
+#        x = self.layer2(x)
+#        x = self.layer3(x)
+#        x = self.layer4(x)
+#        print(x.shape)
+#        torch.cuda.synchronize()
+#        t1 = time.time()
+        x = self.feat_extractor(x)
+
+        out1 = self.upsample(x.clone())
+        out2 = self.upsample_woff(x.clone())
+
+        if self.full:
+            x = self.upsample2(x.clone())
+        
+#        torch.cuda.synchronize()
+#        t2 = time.time()
+#        print("resnet time", t2 - t1)
+
+        return [out1, out2, x]
 
 class DopeNetworkBelief(nn.Module):
     def __init__(
@@ -920,7 +1193,7 @@ if __name__ == "__main__":
     import torch
 
     # Unit test parameters
-    n_keypoints = 16
+    n_keypoints = 14
     batch_size = 1
     iterations = 1000
 
@@ -943,11 +1216,19 @@ if __name__ == "__main__":
 
     #raise ()
 
-    net_input_height = 192  # 480
+    net_input_height = 384  # 480
     net_input_width = 384  # 640
 
     net_input = torch.zeros(batch_size, 3, net_input_height, net_input_width)
     print("net_input shape: {}".format(net_input.shape))
+    net = ResnetSimpleWoff(n_keypoints, n_offs=4, full=False).cuda()
+    for iter in range(iterations):
+        torch.cuda.synchronize()
+        t1 = time.time()
+        y = net(net_input.cuda())
+        torch.cuda.synchronize()
+        t2 = time.time() 
+        print("t2 - t1", t2 - t1)
 
 #    print("ResnetSimple")
 #    net = ResnetSimple(n_keypoints).cuda()
@@ -988,52 +1269,53 @@ if __name__ == "__main__":
 #    full_output=False,
     
     
-    print("########## DreamHourglass vgg_q ##########")
-    net1 = DreamHourglass(
-        n_keypoints,
-        internalize_spatial_softmax=False,
-        skip_connections=False,
-        deconv_decoder=False,
-    ).cuda()
-    for iter in range(iterations):
-        t1 = time.time()
-        y = net1(net_input.cuda())
-        print("shape", y[-1].shape) # [1, 16, 48, 96]
-        t2 = time.time() 
-        print("t2 - t1", t2 - t1)
-    
-    print("########## DreamHourglass vgg_f ##########")
-    net2 = DreamHourglass(
-        n_keypoints,
-        internalize_spatial_softmax=False,
-        skip_connections=False,
-        deconv_decoder=True,
-    ).cuda()
-    for iter in range(iterations):
-        t1 = time.time()
-        y = net2(net_input.cuda())
-        t2 = time.time()
-        print("shape", y[-1].shape) # [1, 16, 192. 384]
-        print("t2 - t1", t2 - t1)
-    
-    
-    print("########## DreamHourglass resnet_h ##########")
-    net3 = ResnetSimple(n_keypoints, full=False).cuda()
-    for iter in range(iterations):
-        t1 = time.time()
-        y = net3(net_input.cuda())
-        t2 = time.time()
-        print("shape", y[-1].shape) # [1, 16, 96, 192]
-        print("t2 - t1", t2 - t1)
+#    print("########## DreamHourglass vgg_q ##########")
+#    net1 = DreamHourglass(
+#        n_keypoints,
+#        internalize_spatial_softmax=False,
+#        skip_connections=False,
+#        deconv_decoder=False,
+#    ).cuda()
+#    for iter in range(iterations):
+#        t1 = time.time()
+#        y = net1(net_input.cuda())
+#        print("shape", y[-1].shape) # [1, 16, 48, 96]
+#        t2 = time.time() 
+#        print("t2 - t1", t2 - t1)
+#    
+#    print("########## DreamHourglass vgg_f ##########")
+#    net2 = DreamHourglass(
+#        n_keypoints,
+#        internalize_spatial_softmax=False,
+#        skip_connections=False,
+#        deconv_decoder=True,
+#    ).cuda()
+#    for iter in range(iterations):
+#        t1 = time.time()
+#        y = net2(net_input.cuda())
+#        t2 = time.time()
+#        print("shape", y[-1].shape) # [1, 16, 192. 384]
+#        print("t2 - t1", t2 - t1)
+#    
+#    
+#    print("########## DreamHourglass resnet_h ##########")
+#    net3 = ResnetSimple(n_keypoints, full=False).cuda()
+#    for iter in range(iterations):
+#        t1 = time.time()
+#        y = net3(net_input.cuda())
+#        t2 = time.time()
+#        print("shape", y[-1].shape) # [1, 16, 96, 192]
+#        print("t2 - t1", t2 - t1)
+#
+#    print("########## DreamHourglass resnet_f ##########")
+#    net4 = ResnetSimple(n_keypoints, full=True).cuda()
+#    for iter in range(iterations):
+#        t1 = time.time()
+#        y = net4(net_input.cuda())
+#        t2 = time.time()
+#        print("shape", y[-1].shape) # [1, 16, 192, 384]
+#        print("t2 - t1", t2 - t1)
 
-    print("########## DreamHourglass resnet_f ##########")
-    net4 = ResnetSimple(n_keypoints, full=True).cuda()
-    for iter in range(iterations):
-        t1 = time.time()
-        y = net4(net_input.cuda())
-        t2 = time.time()
-        print("shape", y[-1].shape) # [1, 16, 192, 384]
-        print("t2 - t1", t2 - t1)
 
 
 

@@ -98,6 +98,31 @@ def load_part_mesh(paths, device):
         faces_num_list += [idx+1 for j in range(9 * pre_num_faces)]
     
     return vertices_list, faces_list, normals_list, faces_num_list
+    
+def load_binary_part_mesh(paths, device):
+    # Return lists of [vertices1, vertices2, ...]
+    # [faces1, faces2, ...]
+    vertices_list, faces_list, normals_list, faces_num_list = [], [], [], []
+    pre_num_vertices = 0
+    pre_num_faces = 0
+    for idx, path in enumerate(paths):
+        this_mesh = kal.io.obj.import_mesh(path, with_materials=True, with_normals=True)
+        vertices = this_mesh.vertices.unsqueeze(0).to(device)
+        normals = this_mesh.vertex_normals.to(device).unsqueeze(0)
+        vertices.requires_grad = False
+        faces = this_mesh.faces.to(device)
+        faces.requires_grad=False
+        faces += pre_num_vertices
+        pre_num_vertices += vertices.shape[1]
+        pre_num_faces = faces.shape[0]
+        #print("faces.shape", pre_num_faces)
+        
+        vertices_list.append(vertices)   
+        faces_list.append(faces)
+        normals_list.append(normals)
+        faces_num_list += [1 for j in range(9 * pre_num_faces)]
+    
+    return vertices_list, faces_list, normals_list, faces_num_list
 
 #def concat_part_mesh(vertices_list, trans_list, angles_list, device, joints_x3d=False):
 #    ori_trans_list = torch.from_numpy(np.array([[0.0,0.0,0.0], [0.0,0.0,0.333], [0.0,0.0,0.0],\
@@ -521,11 +546,6 @@ def seg_and_transform(im_features, mask, Rot_matrix,basis_change_matrix, trans_m
             this_im_feature = this_im_features[mask_index]
             if mask_index[0].detach().cpu().numpy().tolist() != []:
                 if rot_list != [] and trans_list != []: 
-#                    print("this_im_feature.shape", this_im_feature.reshape(-1,3).shape)
-#                    print("rot-list[idx][j]", rot_list[idx][j].shape)
-#                    print("trans_list", trans_list[idx][j].shape)
-#                    print("Rot_matrix[j]", Rot_matrix[j].shape)
-#                    print("trans_matrix[j]", trans_matrix[j].shape)
                     this_im_feature_ = ((this_im_feature.reshape(-1,3) @ rot_list[idx][j].T + trans_list[idx][j].T) @ Rot_matrix[j].T + trans_matrix[j][None, :]) @ basis_change_matrix[j] 
                 else:
                     raise ValueError
@@ -568,7 +588,82 @@ def compute_rotation_matrix_from_ortho6d(poses):
     matrix = torch.stack((x, y, z), -1)
     return matrix
 
+def pixel2world(x, y, z, img_width, img_height, fx, fy, cx=None, cy=None):
+    """Converts image coordinates to 3D real world coordinates using depth values
 
+    Parameters
+    ----------
+    x: np.array
+        Array of X image coordinates.
+    y: np.array
+        Array of Y image coordinates.
+    z: np.array
+        Array of depth values for the whole image.
+    img_width: int
+        Width image dimension.
+    img_height: int
+        Height image dimension.
+    fx: float
+        Focal of the camera over X axis.
+    fy: float
+        Focal of the camera over Y axis.
+    cx: float
+        X coordinate of principal point of the camera.
+    cy: float
+        Y coordinate of principal point of the camera.
+
+    Returns
+    -------
+    w_x: np.array
+        Array of X world coordinates.
+    w_y: np.array
+        Array of Y world coordinates.
+    w_z: np.array
+        Array of Z world coordinates.
+
+    """
+    if cx is None:
+        cx = img_width / 2
+    if cy is None:
+        cy = img_height / 2
+    w_x = (x - cx) * z / fx
+    w_y = (cy - y) * z / fy
+    w_z = z
+    return w_x, w_y, w_z
+    
+def depthmap2points(image, fx, fy, cx=None, cy=None):
+    """Converts image coordinates to 3D real world coordinates using depth values
+
+    Parameters
+    ----------
+    image: np.array
+        Array of depth values for the whole image.
+    fx: float
+        Focal of the camera over X axis.
+    fy: float
+        Focal of the camera over Y axis.
+    cx: float
+        X coordinate of principal point of the camera.
+    cy: float
+        Y coordinate of principal point of the camera.
+
+    Returns
+    -------
+    points: np.array
+        Array of XYZ world coordinates.
+
+    """
+    h, w = image.shape
+    x, y = np.meshgrid(np.arange(w), np.arange(h)) 
+    points = np.zeros((h, w, 3), dtype=np.float32)
+    points[:, :, 0], points[:, :, 1], points[:, :, 2] = pixel2world(x, y, image, w, h, fx, fy, cx, cy)
+    return points
+
+
+def depthmap2pointcloud(depth, fx, fy, cx=None, cy=None):
+    points = depthmap2points(depth, fx, fy, cx, cy)
+    points = points.reshape((-1, 3))
+    return points
 
 
 

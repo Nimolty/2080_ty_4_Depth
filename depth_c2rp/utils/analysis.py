@@ -28,7 +28,6 @@ def batch_outlier_removal_pose(joints_2D, joints_3d_rob_pred, joints_3d_pred_nor
         pose_list.append(pose_pred)
     return torch.cat(pose_list, dim=0) 
 
-
 def add_from_pose(quaternion, trans, x3d_wrt_cam, x3d_wrt_rob):
     # x3d_wrt_cam : (N, 3) ; x3d_wrt_rob : (N, 3)
     rot = np.array(quaternionToRotation(quaternion))
@@ -56,6 +55,12 @@ def batch_add_from_pose(dt_joints_wrt_cam, gt_joints_wrt_cam):
     kp_3d_lr_errors_mean = np.mean(kp_3d_l2_errors, axis=1) # B
     return kp_3d_lr_errors_mean.tolist()
 
+def flat_add_from_pose(dt_joints_wrt_cam, gt_joints_wrt_cam):
+    # dt_joints_wrt_cam, gt_joints_wrt_cam : N x 3
+    kp_3d_errors = dt_joints_wrt_cam - gt_joints_wrt_cam
+    kp_3d_l2_errors = np.linalg.norm(kp_3d_errors, axis=-1)
+    return kp_3d_l2_errors.tolist()
+
 def batch_mAP_from_pose(dt_joints_wrt_cam, gt_joints_wrt_cam, thresholds):
     # dt_joints_wrt_cam, gt_joints_wrt_cam.shape : B x N x 3
     this_mAP = []
@@ -66,7 +71,7 @@ def batch_mAP_from_pose(dt_joints_wrt_cam, gt_joints_wrt_cam, thresholds):
     return this_mAP
 
 def batch_acc_from_joint_angles(dt_joints_pos, gt_joints_pos, thresholds):
-    # dt_joitns_pos, gt_joints_pos : B x 8 x 1
+    # dt_joitns_pos, gt_joints_pos : B x 7 x 1
     this_acc = []
     #dist_angles = np.abs(dt_joints_pos,gt_joints_pos)[:, :-1, 0] # B x 7 Find the bug！
     dist_angles = np.abs(dt_joints_pos - gt_joints_pos)#[:, :, 0] # B x   
@@ -76,14 +81,21 @@ def batch_acc_from_joint_angles(dt_joints_pos, gt_joints_pos, thresholds):
         avg_acc = np.mean(dist_angles < radian_thresh) 
         this_acc.append(avg_acc)
     return this_acc
-    
 
 def add_metrics(add, add_auc_threshold=0.1):
-    # add np.ndarray
+    # add list
+    add = [x for x in add if math.isnan(x) == False] 
+    
+    add = np.array(add)
     mean_add = np.mean(add)
     median_add = np.median(add)
     std_add = np.std(add)
     length_add = len(add)
+    
+    #print(add)
+    
+#    assert np.nan in add
+#    print("Find nan")
     
     # Compute Integral via Approximation Algorithms
     delta_threshold = 0.00001
@@ -104,6 +116,63 @@ def add_metrics(add, add_auc_threshold=0.1):
         "add_auc_thresh": add_auc_threshold,
     }
     return metrics
+
+def batch_pck_from_pose(keypoints_gt, keypoints_dt):
+    # keypoints_gt : B x N x 2
+    # keypoints_detected : B x N x 2
+    kp_2d_errors = keypoints_dt - keypoints_gt # B x N x 2
+    kp_2d_l2_errors = np.linalg.norm(kp_2d_errors, axis=-1) # B x N
+    kp_2d_l2_errors_mean = np.mean(kp_2d_l2_errors, axis=1) # B
+    return kp_2d_l2_errors_mean.tolist()
+
+def batch_1d_pck_from_pose(keypoints_gt, keypoints_dt):
+    # keypoints_gt : B x N x 1
+    # keypoints_dt : B x N x 1
+    kp_1d_errors = keypoints_dt - keypoints_gt
+    kp_1d_l2_errors = np.linalg.norm(kp_1d_errors, axis=-1) # B x N
+    kp_1d_l2_errors_mean = np.mean(kp_1d_l2_errors, axis=1) # B
+    return kp_1d_l2_errors_mean.tolist()
+
+def pck_metrics(kp_l2_errors, auc_pixel_threshold=12.0):
+    if len(kp_l2_errors) > 0:
+        kp_l2_errors = np.array(kp_l2_errors)
+        kp_l2_error_mean = np.mean(kp_l2_errors)
+        kp_l2_error_median = np.median(kp_l2_errors)
+        kp_l2_error_std = np.std(kp_l2_errors)
+        
+        # compute the auc
+        delta_pixel = 0.01
+        pck_values = np.arange(0, auc_pixel_threshold, delta_pixel)
+        y_values = []
+
+        for value in pck_values:
+            valids = len(np.where(kp_l2_errors < value)[0])
+            y_values.append(valids)
+
+        kp_auc = (
+            np.trapz(y_values, dx=delta_pixel)
+            / float(auc_pixel_threshold)
+            / float(len(kp_l2_errors))
+        )
+    else:
+        kp_l2_error_mean = None
+        kp_l2_error_median = None
+        kp_l2_error_std = None
+        kp_auc = None
+    
+    metrics = {
+        "l2_error_mean_px": kp_l2_error_mean,
+        "l2_error_median_px": kp_l2_error_median,
+        "l2_error_std_px": kp_l2_error_std,
+        "l2_error_auc": kp_auc,
+        "l2_error_auc_thresh_px": auc_pixel_threshold,
+    }
+    return metrics
+
+    
+    
+    
+    
 
 def print_to_screen_and_file(file, text):
     print(text)

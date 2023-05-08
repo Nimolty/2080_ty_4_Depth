@@ -13,7 +13,7 @@ DATASET:
   NAME          : HELEN                                               # dataset name to be trained with (camvid, cityscapes, ade20k)
   TRAINING_ROOT : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"     
   VAL_ROOT      : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"   # dataset root path
-  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn/"             
+  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"              
   #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Small_Testing_Data_0115/"  
   #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Test_Data_0115/"  
   #TESTING ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
@@ -45,13 +45,20 @@ TRAIN:
 
 DR:
   ENGINE          : Kaolin
-  CAD_MODEL_PATHS : [../materials/franka_panda/Link0.obj, ../materials/franka_panda/Link1.obj, ../materials/franka_panda/Link2.obj,
-                     ../materials/franka_panda/Link3.obj, ../materials/franka_panda/Link4.obj, ../materials/franka_panda/Link5.obj,
-                     ../materials/franka_panda/Link6.obj, ../materials/franka_panda/Link7.obj, ../materials/franka_panda/panda_hand.obj,
-                     ../materials/franka_panda/panda_finger_joint1.obj, ../materials/franka_panda/panda_finger_joint2.obj
-                    ] 
+  CAD_MODEL_PATHS : [/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/materials/franka_panda/Link0.obj, 
+                     /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/materials/franka_panda/Link1.obj, 
+                     /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/materials/franka_panda/Link2.obj,
+                     /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/materials/franka_panda/Link3.obj, 
+                     /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/materials/franka_panda/Link4.obj, 
+                     /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/materials/franka_panda/Link5.obj,
+                     /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/materials/franka_panda/Link6.obj, 
+                     /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/materials/franka_panda/Link7.obj,  
+                     /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/materials/franka_panda/panda_hand.obj,
+                     /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/materials/franka_panda/panda_finger_joint1.obj, 
+                     /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/materials/franka_panda/panda_finger_joint2.obj
+                     ]
   RT_LR           : 0.001
-  GA_LR           : 0.005
+  GA_LR           : 0.01
   NUM_OF_SAMPLE_PTS : 3000
 
 LOSS:
@@ -86,7 +93,7 @@ EVAL:
     ENABLE      : false                               # multi-scale and flip evaluation  
     FLIP        : true                                # use flip in evaluation  
     SCALES      : [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]   # scales used in MSF evaluation         
-  BATCH_SIZE    : 2  
+  BATCH_SIZE    : 1  
   NUM_WORKERS   : 4   
 
 

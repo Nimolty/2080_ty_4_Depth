@@ -75,7 +75,7 @@ class Depth_dataset(Dataset):
                  raw_img_size: tuple = (640, 360), input_img_size: tuple = (384, 216), sigma: int = 4., norm_type: str = 'mean_std',
                  network_input: str = 'D', network_output: str = 'H', network_task: str = '3d_RPE',
                  depth_range: tuple = (500, 3380, 15), depth_range_type: str = 'normal', aug_type: str = '3d',
-                 aug_mode: bool = True, noise: bool = False, demo: bool = False, load_mask: bool = False, mask_dict : dict = {}, unnorm_depth: bool=False):
+                 aug_mode: bool = True, noise: bool = False, demo: bool = False, load_mask: bool = False, mask_dict : dict = {}, unnorm_depth: bool=False, cx_delta: int = 0, cy_delta: int = 0):
         """Load Baxter robot synthetic dataset
 
         Parameters
@@ -138,6 +138,8 @@ class Depth_dataset(Dataset):
         self.load_mask = load_mask
         self.mask_dict = mask_dict
         self.unnorm_depth = unnorm_depth
+        self.cx_delta = cx_delta
+        self.cy_delta = cy_delta
         self.data = self.load_data()
 
     def __len__(self):
@@ -158,10 +160,32 @@ class Depth_dataset(Dataset):
         assert W == self.input_img_size[0]
         # RGB and depth scale
         scale_x, scale_y = depth_img.shape[1] / self.raw_img_size[0], depth_img.shape[0] / self.raw_img_size[1]
+        # initialize intrinsic matrix
+        cam_settings_data = json.load(open(str(self.train_dataset_dir / "_camera_settings.json"), 'r'))
+        fx, fy = cam_settings_data["camera_settings"][0]["intrinsic_settings"]["fx"]* scale_x, cam_settings_data["camera_settings"][0]["intrinsic_settings"]["fy"] * scale_y
+        cx, cy = cam_settings_data["camera_settings"][0]["intrinsic_settings"]["cx"] * scale_x, cam_settings_data["camera_settings"][0]["intrinsic_settings"]["cy"] * scale_y - 12.0
         
         # image size divided by 32 should be an even value (for SH network)
         depth_img = depth_img[12:-12, :] # 192 * 384
-        depth_pf_img = depth_pf_img[12:-12, :]
+        depth_pf_img = depth_pf_img[12:-12, :]    
+        
+        
+        M = np.float32([[1, 0, self.cx_delta], [0, 1, self.cy_delta]])
+        depth_img_clone = cv2.warpAffine(depth_img, M, (depth_img.shape[1], depth_img.shape[0]))
+        #depth_img_clone[0:self.cy_delta, :] = depth_img[0:self.cy_delta, :]
+        cx += self.cx_delta
+        cy += self.cy_delta
+        depth_img = depth_img_clone  
+        
+#        print("idx", idx)
+#        if idx <= 3:
+#            cv2.imwrite(f"./check/id_{idx}_cx_{self.cx_delta}cy_{self.cy_delta}.png", depth_img[:, :, None]) 
+        
+#        print("cx_delta", self.cx_delta)
+#        print("cy_delta", self.cy_delta)
+        
+        
+        mask_file_res = None
         if self.load_mask:
             mask_file = cv2.imread(sample["mask_file"], cv2.IMREAD_UNCHANGED)[:, :, 2]
             mask_file_res = np.zeros_like(mask_file)
@@ -172,7 +196,7 @@ class Depth_dataset(Dataset):
             #mask_file_res[np.where(mask_file != 1)] = 1
             mask_file_res = cv2.resize(mask_file_res[:, :, None], (W, H), interpolation=cv2.INTER_NEAREST)
             mask_file_res = mask_file_res[12:-12, :][:, :, None]
-            #print(mask_file_res.shape)
+            #print("mask_file.shape", mask_file_res.shape)
         
         # adapt depth image to "padding" depth range type
         if self.depth_range_type == 'padding':
@@ -181,23 +205,45 @@ class Depth_dataset(Dataset):
             padding = int(np.abs(depth_img.shape[0] - new_img_h) // 2)
             depth_img = cv2.copyMakeBorder(depth_img, padding, padding, 0, 0, cv2.BORDER_CONSTANT, 0)
             depth_pf_img = cv2.copyMakeBorder(depth_pf_img, padding, padding, 0, 0, cv2.BORDER_CONSTANT, 0)
+            #mask_file_res = cv2.copyMakeBorder(mask_file_res, padding, padding, 0, 0, cv2.BORDER_CONSTANT, 0)
         
         # copy unnormed depth img
         if self.unnorm_depth:
             depth_img_unnorm = depth_img.copy() / 1000
             depth_pf_img_unnorm = depth_pf_img.copy() / 1000
         
-        # initialize intrinsic matrix
-        cam_settings_data = json.load(open(str(self.train_dataset_dir / "_camera_settings.json"), 'r'))
-        fx, fy = cam_settings_data["camera_settings"][0]["intrinsic_settings"]["fx"]* scale_x, cam_settings_data["camera_settings"][0]["intrinsic_settings"]["fy"]* scale_y
-        cx, cy = depth_img.shape[1] / 2, depth_img.shape[0] / 2
+        #cx, cy = depth_img.shape[1] / 2, depth_img.shape[0] / 2
+        # Pay Attention to the cy!!!
+        
+        if self.depth_range_type == "padding":
+            assert W > H
+            cx = cx
+            cy = cy + 96.0
+        else:
+            cx = cx
+            cy = cy 
+        
+        
+        
+        
         intrinsic = np.asarray([
             [fx, 0, cx],
             [0, fy, cy],
             [0, 0, 1],
         ])
         
+        
+    
         t2 = time.time()
+        if self.unnorm_depth:
+            depth_img_unnorm = depth_img.copy() / 1000
+            depth_pf_img_unnorm = depth_pf_img.copy() / 1000
+            
+            depth_img_unnorm_points = depthmap2points(depth_img_unnorm, fx=fx, fy=fy, cx=intrinsic[0, 2],
+                                             cy=intrinsic[1, 2])
+            depth_pf_img_unnorm_points = depthmap2points(depth_pf_img_unnorm, fx=fx, fy=fy, cx=intrinsic[0, 2],
+                                             cy=intrinsic[1, 2])
+        
         
         joints_2D = np.zeros((sample['joints'].shape[0], 2))
         joints_3D_Z = np.zeros((sample['joints'].shape[0], 3))
@@ -320,10 +366,12 @@ class Depth_dataset(Dataset):
         # compute XYZ image
         if "XYZ" in self.network_input:
             xyz_img = depthmap2points(depth_img / 1000, fx=fx, fy=fy, cx=intrinsic[0, 2], cy=intrinsic[1, 2])
+            xyz_img_raw = xyz_img.copy()
             xyz_img[..., 0] = xyz_img[..., 0] / 3.
             xyz_img[..., 1] = xyz_img[..., 1] / 2.
             xyz_img[..., 2] = xyz_img[..., 2] / 5.
             xyz_img[depth_img == 0] = 0
+            xyz_img_raw[depth_img == 0] = 0
 
         # depth map and keypoints normalization
         depth_img = apply_depth_normalization_16bit_image(depth_img, self.norm_type)
@@ -362,24 +410,28 @@ class Depth_dataset(Dataset):
                 # compute distances (mm) from point
                 dst_mm = np.sqrt((X - P[0]) ** 2 + (z_unsqueezed - P[2]) ** 2)  # [Z / dZ, u]
                 # compute heatmap
-                heatmaps_uz[n] = np.exp(-(dst_mm ** 2 / (2.0 * sigma_mm ** 2)))  # [Z / dZ, u]
+                heatmaps_uz[n] = np.exp(-(dst_mm ** 2 / (2.0 * sigma_mm ** 2)))  # [Z / dZ, u] 
             
-            heatmaps_25d = np.concatenate((heatmaps_uv, heatmaps_uz), axis=0)
+            heatmaps_25d = np.concatenate((heatmaps_uv, heatmaps_uz), axis=0) 
 
         # keypoint to heatmap transform
         if self.network_task == '2d_RPE':
             heatmaps = heatmap_from_kpoints_array(kpoints_array=joints_2D, shape=depth_img.shape[:2],
-                                                  sigma=self.sigma)
+                                                  sigma=self.sigma) 
 
         # mean and std for 2D and 3D joints
         #stats = np.atleast_1d(np.load(str(self.dataset_dir / "mean_std_stats.npy"), allow_pickle=True))[0]
         #print(joints_3D_Z.cuda())
         
         t5 = time.time()
+        
+        #print("dZ", dZ)
+        joints_2d_dz = ((joints_3D_Z[:, 2:3] * 1000 - Z_min) / dZ)
 #        print("t5 - t4", t5 -t4)
 #        print("t4 - t3", t4 -t3)
 #        print("t3 - t2", t3 -t2)
 #        print("t2 - t1", t2 -t1)
+
         
         output = {
             'depth': torch.from_numpy(depth_img[None, ...]),
@@ -388,10 +440,13 @@ class Depth_dataset(Dataset):
             'K_depth': intrinsic,
             'joints_2D_depth': joints_2D,
             'joints_3D_Z': joints_3D_Z,
+            "joints_2d_dz" : joints_2d_dz,
             "joints_3D_kps" : torch.from_numpy(np.array(sample["joints_kps"]))[[0,2,3,4,6,7,8]],
             "rgb_path" : sample['rgb_file'],
             "joints_7" : torch.from_numpy(np.array(sample["joints_8"])[:7]).float(),
-            "R2C_Pose" : R2C_Pose_after_aug[:3, :]#torch.from_numpy(R2C_Pose_after_aug)[:3, :].float(), 
+            "R2C_Pose" : R2C_Pose_after_aug[:3, :], #torch.from_numpy(R2C_Pose_after_aug)[:3, :].float(), 
+            "depth_path" : sample['depth_file']
+            
             
         }
         if self.network_task == '2d_RPE':
@@ -402,12 +457,15 @@ class Depth_dataset(Dataset):
         else:
             output['heatmap_25d'] = torch.from_numpy(heatmaps_25d.astype(np.float32))
         if "XYZ" in self.network_input:
-            output['xyz_img'] = torch.from_numpy(xyz_img.transpose(2, 0, 1))
+            output['xyz_img'] = torch.from_numpy(xyz_img.transpose(2, 0, 1))  
+            output["xyz_img_raw"] = torch.from_numpy(xyz_img_raw.transpose(2, 0, 1)) 
         if self.load_mask:
             output["mask"] = torch.from_numpy(mask_file_res).float()
         if self.unnorm_depth:
             output["unnorm_depth"] = torch.from_numpy(depth_img_unnorm[None, ...]).float()
             output["unnorm_pf_depth"] = torch.from_numpy(depth_pf_img_unnorm[None, ...]).float()
+            output["unnorm_xyz"] = torch.from_numpy(depth_img_unnorm_points).float()
+            output["unnorm_pf_xyz"] = torch.from_numpy(depth_pf_img_unnorm_points).float()
 
         return output
 

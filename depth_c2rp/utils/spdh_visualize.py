@@ -110,7 +110,7 @@ def get_joint_3d_pred(heatmap_pred, cfg, h, w, c, input_K):
     joints_3d_pred *= z
     return heatmap_pred, joints_3d_pred
 
-def get_blended_images(gt_images, K, joints_3d_gt, joints_3d_pred, device, heatmaps_pred, heatmaps_gt):
+def get_blended_images(gt_images, K, joints_3d_gt, joints_3d_pred, device, heatmaps_pred=None, heatmaps_gt=None):
     pred_images = gt_images.copy()
     blend_images = gt_images.copy()   
     
@@ -124,16 +124,22 @@ def get_blended_images(gt_images, K, joints_3d_gt, joints_3d_pred, device, heatm
             (int(joint_2d_gt[0]), int(joint_2d_gt[1])), 2, (255, 0, 0), -1)
             cv2.circle(pred_images[b],
             (int(joint_2d_pred[0]), int(joint_2d_pred[1])), 2, (0, 255, 0), -1)
-    gt_images = np.stack(gt_images).transpose(0, 3, 1, 2).astype(float) / 255.
-    pred_images = np.stack(pred_images).transpose(0, 3, 1, 2).astype(float) / 255.
-    c = heatmaps_pred.shape[1]
-    blend_images = np.stack(blend_images).transpose(0, 3, 1, 2).astype(float) / 255.
-    pred_blend_uv = 0.5 * blend_images + 0.5 * to_colormap(heatmaps_pred[:8, :(c // 2)], device)
-    pred_blend_uz = to_colormap(heatmaps_pred[:8, (c // 2):], device)
-    true_blend_uv = 0.5 * blend_images + 0.5 * to_colormap(heatmaps_gt[:8, :(c // 2)], device)
-    true_blend_uz = to_colormap(heatmaps_gt[:8, (c // 2):], device)
+    gt_images = [np.stack(gt_images).transpose(0, 3, 1, 2).astype(float) / 255.]
+    pred_images = [np.stack(pred_images).transpose(0, 3, 1, 2).astype(float) / 255.]
     
-    return gt_images, pred_images, true_blend_uv, true_blend_uz, pred_blend_uv, pred_blend_uz
+    if heatmaps_pred is not None and heatmaps_gt is not None:
+        c = heatmaps_pred.shape[1]
+        blend_images = np.stack(blend_images).transpose(0, 3, 1, 2).astype(float) / 255.
+        pred_blend_uv = 0.5 * blend_images + 0.5 * to_colormap(heatmaps_pred[:, :c], device)
+        true_blend_uv = 0.5 * blend_images + 0.5 * to_colormap(heatmaps_gt[:, :c], device)
+        true_blend_uv = [true_blend_uv]
+        pred_blend_uv = [pred_blend_uv]
+    else:
+        true_blend_uv = None
+        pred_blend_uv = None
+    
+    
+    return gt_images, pred_images, true_blend_uv, pred_blend_uv,
     
 def log_and_visualize_single(log_writer, global_iter,
                       gt_results=None, pred_results=None,
@@ -160,10 +166,9 @@ def log_and_visualize_single(log_writer, global_iter,
         eval_grid = random_blend_grid(true_blends_UZ, pred_blends_UZ)
         eval_grid = np.concatenate(eval_grid, axis=1)
         eval_grid = torch.from_numpy(eval_grid)
-        log_writer.add_image(tag=f'Train/Joints UZ heatmaps', img_tensor=eval_grid,
+        log_writer.add_image(tag=f'Train/Joints UZ heatmaps', img_tensor=eval_grid, 
                                   global_step=global_iter)
 
-    
     
     
     
