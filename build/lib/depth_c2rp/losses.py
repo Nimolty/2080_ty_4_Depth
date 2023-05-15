@@ -2,6 +2,7 @@ import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 from depth_c2rp.utils.utils import batch_quaternion_matrix, compute_concat_loss
+from depth_c2rp.DifferentiableRenderer.Kaolin.Renderer import DiffPFDepthRenderer
 
 class CrossEntropy(nn.Module):
     def __init__(self, weight: Tensor = None, aux_weights: list = [1, 0.4, 0.4]) -> None:

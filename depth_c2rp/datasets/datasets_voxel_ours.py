@@ -33,7 +33,7 @@ class Voxel_dataset(Dataset):
                  raw_img_size: tuple = (640, 360), input_img_size: tuple = (384, 216), sigma: int = 4., norm_type: str = 'mean_std',
                  network_input: str = 'D', network_output: str = 'H', network_task: str = '3d_RPE',
                  depth_range: tuple = (500, 3380, 15), depth_range_type: str = 'normal', aug_type: str = '3d',
-                 aug_mode: bool = True, noise: bool = False, demo: bool = False, load_mask: bool = False, mask_dict : dict = {}, unnorm_depth: bool=False, cx_delta: int = 0, cy_delta: int = 0, change_intrinsic: bool = False):
+                 aug_mode: bool = True, noise: bool = False, demo: bool = False, load_mask: bool = False, mask_dict : dict = {}, unnorm_depth: bool=False, cx_delta: int = 0, cy_delta: int = 0, change_intrinsic: bool=False, uv_input : bool = False):
         assert init_mode in ['train', 'test']
 
         self.train_dataset_dir = Path(train_dataset_dir)
@@ -61,6 +61,7 @@ class Voxel_dataset(Dataset):
         self.mask_dict = mask_dict
         self.unnorm_depth = unnorm_depth
         self.change_intrinsic = change_intrinsic
+        self.uv_input = uv_input
         self.data = self.load_data()
 
     def __len__(self):
@@ -71,9 +72,11 @@ class Voxel_dataset(Dataset):
         sample = self.data[self.mode][idx].copy()
         # image loading (depth and/or RGB)
         if self.mode == "train" or self.mode == "val":
-            depth_img = cv2.imread(sample['depth_file'], cv2.IMREAD_UNCHANGED)[:, :, 0].astype(np.float32) * 1000 # milimeters 
+            #depth_img = cv2.imread(sample['depth_file'], cv2.IMREAD_UNCHANGED)[:, :, 0].astype(np.float32) * 1000 # milimeters 
+            depth_img = np.load(sample["depth_file"]).astype(np.float32) * 1000
         elif self.mode == "real":
-            depth_img = cv2.imread(sample['depth_file'], cv2.IMREAD_UNCHANGED).astype(np.float32)
+            #depth_img = cv2.imread(sample['depth_file'], cv2.IMREAD_UNCHANGED).astype(np.float32)
+            depth_img = np.load(sample["depth_file"]).astype(np.float32)
         else:
             raise ValueError
         t1_mid = time.time()
@@ -107,8 +110,8 @@ class Voxel_dataset(Dataset):
         if self.depth_range_type == 'padding':
             Z_min, Z_max, dZ = self.depth_range
             new_img_h = (Z_max - Z_min) // dZ
-            if self.mode == "real":
-                depth_img = depth_img[12:-12, :]
+#            if self.mode == "real" or self.mode == "val":
+#                depth_img = depth_img[12:-12, :]
             padding = int(np.abs(depth_img.shape[0] - new_img_h) // 2)
             #print("depth_img.shape", depth_img.shape)
             #print("torch.max", np.max(depth_img))
@@ -280,6 +283,10 @@ class Voxel_dataset(Dataset):
             xyz_img[depth_img == 0] = 0
             
             xyz_img_scale = xyz_img.copy()
+            if self.mode == "real" or self.mode == "val":
+                #depth_img = depth_img[12:-12, :]
+                xyz_img_scale[84:96, :, :] = 0
+                xyz_img_scale[288:300, :, :] = 0
             xyz_img_scale[..., 0] = xyz_img_scale[..., 0] / 3.
             xyz_img_scale[..., 1] = xyz_img_scale[..., 1] / 2.
             xyz_img_scale[..., 2] = xyz_img_scale[..., 2] / 5.
@@ -334,6 +341,7 @@ class Voxel_dataset(Dataset):
         joints_2d_dz = ((joints_3D_Z[:, 2:3] * 1000 - Z_min) / dZ)
         #print("intrinsic", intrinsic)
         #print(ind)
+        #print("t4  - t3", t4 - t3)
         
 #        if "000001" in sample["depth_file"]: 
 #            print("joints_3D_Z", joints_3D_Z)
@@ -366,10 +374,19 @@ class Voxel_dataset(Dataset):
             output['heatmap_25d'] = torch.from_numpy(heatmaps_25d.astype(np.float32))
         if "XYZ" in self.network_input:
             output['xyz_img'] = xyz_img  # H x W x 3
-            output["rgb_img"] = xyz_img.transpose(2, 0, 1) # 3 x H x W
+            rgb_img = xyz_img.transpose(2, 0, 1) # 3 x H x W
+            
+            if self.uv_input:
+                u_input, v_input = np.meshgrid(np.arange(xyz_img.shape[1]), np.arange(xyz_img.shape[0]))
+                output["rgb_img"] = np.concatenate([rgb_img, u_input[None, ...], v_input[None, ...]], axis=0)
+            else:
+                output["rgb_img"] = rgb_img
+            
             output["xyz_img_scale"] = xyz_img_scale.transpose(2, 0, 1)
         if self.load_mask:
             output["mask"] = torch.from_numpy(mask_file_res).float()
+        
+        #print("t4 - t3", t4 - t3)
 
         return output
 
@@ -409,7 +426,7 @@ class Voxel_dataset(Dataset):
             if split == "train" or split == "val":
                 iter = 0
                 dataset_dir = dataset_dict[split]
-                rgb_files = glob.glob(os.path.join(dataset_dir, "*", "*_color.png"))
+                rgb_files = glob.glob(os.path.join(dataset_dir, "*", "*.npy"))
                 rgb_files.sort()
                 for rgb_file in tqdm(rgb_files, f"Loading {split} ..."):
                      # rgb_file like this : '/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201/10443/0029_color.png'
@@ -417,10 +434,9 @@ class Voxel_dataset(Dataset):
                     img_name = f"{scene_id}_{frame_name}"
                     
                     # Here the dataset requires depth 8 and depth 16, so how to do that?
-                    depth_file = rgb_file.replace('color.png', 'simDepthImage.exr')
-                    depth_pf_file = rgb_file.replace("color.png", "depth_60.exr")
-                    joints_file = rgb_file.replace('color.png', 'meta.json')
-                    mask_file = rgb_file.replace("color.png", "mask.exr")
+                    depth_file = rgb_file
+                    depth_pf_file = rgb_file
+                    joints_file = rgb_file.replace('simDepthImage.npy', 'meta.json')
                     with open(joints_file, 'r') as fd:
                         json_data = json.load(fd)[0]
                     json_keypoints_data = json_data["keypoints"]                    
@@ -447,7 +463,6 @@ class Voxel_dataset(Dataset):
                             'rgb_file': rgb_file,
                             "depth_file" : depth_file, # mm
                             "depth_pf_file" : depth_pf_file,
-                            "mask_file"  : mask_file,
                             'joints': joints_pos,             # [tx, ty, tz, qw, qx, qy, qz]
                             "joints_8" : joints_8_pos, 
                             "joints_kps" : json_keypoints_pos,
@@ -459,17 +474,17 @@ class Voxel_dataset(Dataset):
             
             elif split == "real":
                 dataset_dir = dataset_dict[split]
-                depth_files = glob.glob(os.path.join(dataset_dir, "*.exr"))  
+                depth_files = glob.glob(os.path.join(dataset_dir, "*.npy"))  
                  
                 print("length of dataset_dir", len(depth_files))
                 depth_files.sort() 
                 
                 for depth_file in tqdm(depth_files, f"Loading {split} ..."):
                     # rgb_file like this : '/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201/10443/0029_color.png'
-                    frame_name = (depth_file.split('/')[-1]).replace(".exr", "")
+                    frame_name = (depth_file.split('/')[-1]).replace(".npy", "")
                     
                     # Here the dataset requires depth 8 and depth 16, so how to do that?
-                    meta_file = depth_file.replace('exr', 'json')
+                    meta_file = depth_file.replace('npy', 'json')
                     with open(meta_file, 'r') as fd:
                         json_data = json.load(fd)[0]
                     json_keypoints_data = json_data["keypoints"]
@@ -510,8 +525,9 @@ class Voxel_dataset(Dataset):
         return data
 
 if __name__ == "__main__":
-    PandaDataset = Depth_dataset(train_dataset_dir=Path("/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"),
+    PandaDataset = Voxel_dataset(train_dataset_dir=Path("/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn/"),
                                             val_dataset_dir=Path("/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"),
+                                            real_dataset_dir=Path("/DATA/disk1/hyperplane/Depth_C2RP/Data/Real_Test/depth/"),
                                             joint_names = JOINT_NAMES,
                                             run=[0],
                                             init_mode="train", 
@@ -526,17 +542,17 @@ if __name__ == "__main__":
                                             depth_range=[500, 3380, 15],
                                             depth_range_type="normal",
                                             aug_type="3d",
-                                            aug_mode=False) 
+                                            aug_mode=True) 
                                        #demo=self.cfg['demo'])
     a = dict()
     a["train"] = copy.copy(PandaDataset)
-    PandaDataset.eval()
+    PandaDataset.train()
     a["val"] = PandaDataset
-    for key, value in a.items():
-        print(len(value))
+#    for key, value in a.items():
+#        print(len(value))
     print("len(PandaDataset)", len(PandaDataset))
     for idx, item in enumerate(PandaDataset):
-        print("item.keys()", item.keys())
+        pass
 #        if idx >= 1: 
 #            break
 #        #'depth': torch.from_numpy(depth_img[None, ...]),

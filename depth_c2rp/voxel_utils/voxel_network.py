@@ -199,6 +199,12 @@ class build_voxel_network(nn.Module):
         
         # voxel network cfg
         self.voxel_cfg = cfg["voxel_network"]
+        if not self.voxel_cfg["raw_input_type"]:
+            self.embed_ch_num = 2
+        else:
+            self.embed_ch_num = 3
+        
+        
         self.device = device
         
         # embedding network
@@ -214,8 +220,12 @@ class build_voxel_network(nn.Module):
                                     output_channels=self.voxel_cfg["pnet_out"], gf_dim=self.voxel_cfg["pnet_gf"])
         self.pnet_model = self.pnet_model.to(self.device)
         
-        self.dec_inp_dim = self.voxel_cfg["pnet_out"] + self.voxel_cfg["rgb_out"] * (self.voxel_cfg["roi_out_bbox"]**2 + (cfg["DATASET"]["INPUT_RESOLUTION"][0] // self.voxel_cfg["global_ratio"]) **2) \
-                            + 2 * self.embed_ch + self.embeddirs_ch
+        if cfg["voxel_network"]["local_embedding_type"] == "ROIConcat":
+            self.dec_inp_dim = self.voxel_cfg["pnet_out"] + self.voxel_cfg["rgb_out"] * (self.voxel_cfg["roi_out_bbox"]**2 + (cfg["DATASET"]["INPUT_RESOLUTION"][0] // self.voxel_cfg["global_ratio"]) **2) \
+                            + self.embed_ch_num * self.embed_ch + self.embeddirs_ch
+        elif cfg["voxel_network"]["local_embedding_type"] == "ROIPooling":
+            self.dec_inp_dim = self.voxel_cfg["pnet_out"] + self.voxel_cfg["rgb_out"] * (1 + (cfg["DATASET"]["INPUT_RESOLUTION"][0] // self.voxel_cfg["global_ratio"]) **2) \
+                            + self.embed_ch_num * self.embed_ch + self.embeddirs_ch
         
         self.offset_dec = IEF(self.device, inp_dim=self.dec_inp_dim, out_dim=1, gf_dim=self.voxel_cfg["imnet_gf"], 
                                     n_iter=self.voxel_cfg["n_iter"], use_sigmoid=self.voxel_cfg["use_sigmoid"]).to(self.device)
@@ -290,8 +300,11 @@ def load_voxel_model(model, voxel_optimizer, scheduler, weights_dir, device):
     
     state_dict = {}
     for k in checkpoint["model"]:
+        print("k", k)
         if k in model.state_dict():
             state_dict[k] = checkpoint["model"][k]
+        if k[10:] in model.state_dict():
+            state_dict[k[10:]] = checkpoint["model"][k]
     #ret = model.load_state_dict(checkpoint["model"], strict=False)
     ret = model.load_state_dict(state_dict, strict=True)
     print(f'restored "{weights_dir}" model. Key errors:')

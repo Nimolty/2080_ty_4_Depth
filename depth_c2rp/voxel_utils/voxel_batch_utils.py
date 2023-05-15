@@ -106,7 +106,7 @@ def sample_valid_points(valid_mask, sample_num, block_x=8, block_y=8, data_dict=
     assert sampled_valid_idx.shape[0] == bs * sample_num
     return sampled_valid_idx
 
-def get_valid_points(data_dict, valid_sample_num=1):
+def get_valid_points(data_dict, valid_sample_num=1, rgb_in=3):
     '''
         If valid_sample_num == -1, use all valid points. Otherwise uniformly sample valid points in a small block.
         valid_idx: (valid_point_num,2), 1st dim is batch idx, 2nd dim is flattened img idx.
@@ -121,7 +121,7 @@ def get_valid_points(data_dict, valid_sample_num=1):
     valid_flat_img_id = valid_idx[:,1]
     # get rgb and xyz for valid points.
     valid_xyz = data_dict['xyz'][valid_bid, valid_flat_img_id]
-    rgb_img_flat = data_dict['rgb_img'].permute(0,2,3,1).contiguous().reshape(bs,-1,3)
+    rgb_img_flat = data_dict['rgb_img'].permute(0,2,3,1).contiguous().reshape(bs,-1,rgb_in)
     valid_rgb = rgb_img_flat[valid_bid, valid_flat_img_id]
     #print(len(valid_bid))
     # update intermediate data in data_dict
@@ -290,12 +290,14 @@ def get_miss_ray(data_dict):
     
     # get ray dir and img index for sampled miss point
     miss_img_ind = img_ind_flat[miss_bid, miss_flat_img_id]
+    miss_xyz_raw = data_dict["xyz"][miss_bid, miss_flat_img_id]
     # update data_dict
     data_dict.update({
         'miss_bid': miss_bid,
         'miss_flat_img_id': miss_flat_img_id,
         'miss_ray_dir': miss_ray_dir,
         'miss_img_ind': miss_img_ind,
+        "miss_xyz_raw": miss_xyz_raw,
         'total_miss_sample_num': total_miss_sample_num 
     })
 
@@ -430,7 +432,7 @@ def compute_gt(data_dict):
 def prepare_data(batch):
     t0 = time.time()
     data_dict = {}
-    rgb_img, xyz_img = batch["rgb_img"].cuda(), batch["xyz_img"].cuda()
+    rgb_img, xyz_img = batch["rgb_img"].float().cuda(), batch["xyz_img"].float().cuda()
     #xyz_img = batch["xyz_img"].cuda()
     t1 = time.time()
     #assert rgb_img.shape == xyz_img.shape
@@ -443,8 +445,8 @@ def prepare_data(batch):
                       "cy" : batch["K_depth"][:, 1, 2].view(bs, -1).cuda(),
                      })
     data_dict.update({
-                     "rgb_img" : rgb_img.cuda(),
-                     "xyz" : xyz_img.view(bs, -1, 3).cuda()
+                     "rgb_img" : rgb_img,
+                     "xyz" : xyz_img.view(bs, -1, 3)
                      })
     data_dict.update({"path" : batch["rgb_path"]})
     
@@ -630,6 +632,7 @@ def get_embedding_ours(data_dict, embed_fn, embeddirs_fn, full_rgb_feat, pnet_mo
     })
 
 def get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model,
+                  local_embedding_type="ROIConcat", 
                   rgb_embedding_type='ROIAlign', roi_inp_bbox=8, roi_out_bbox=2, pnet_pos_type="rel", pnet_model_type='twostage'):
     ########################### 
     #   Get embedding
@@ -643,8 +646,8 @@ def get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model,
     intersect_enter_dist, intersect_leave_dist = intersect_dist[:,0], intersect_dist[:,1]
 
     intersect_dir = data_dict['miss_ray_dir'][data_dict['miss_ray_intersect_idx']]
-#    print("intersect_dir.shape", intersect_dir.shape)
-#    print("intersect_dir", intersect_dir)
+    intersect_raw_pos = data_dict["miss_xyz_raw"][data_dict['miss_ray_intersect_idx']]
+    #print("intersect_raw_pos", intersect_raw_pos)
     intersect_enter_pos = intersect_dir * intersect_enter_dist.unsqueeze(-1)
     intersect_leave_pos = intersect_dir * intersect_leave_dist.unsqueeze(-1)
     
@@ -660,11 +663,13 @@ def get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model,
     # In the original paper, this is abs
     inp_enter_pos = intersect_enter_pos
     inp_leave_pos = intersect_leave_pos
+    inp_raw_pos = intersect_raw_pos
     torch.cuda.synchronize()
     t3 = time.time()
     # positional encoding
     intersect_enter_pos_embed = embed_fn(inp_enter_pos)
     intersect_leave_pos_embed = embed_fn(inp_leave_pos)
+    intersect_raw_pos_embed = embed_fn(inp_raw_pos)
     intersect_dir_embed = embeddirs_fn(intersect_dir)    
     
     torch.cuda.synchronize()
@@ -697,8 +702,13 @@ def get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model,
         
         try:
             #print("intersect_rgb_feat.shape", intersect_rgb_feat.shape)
-            intersect_rgb_feat = intersect_rgb_feat.reshape(intersect_rgb_feat.shape[0],-1)
-            intersect_rgb_feat = torch.cat([intersect_rgb_feat, global_rgb_feat_bid],-1)
+            if local_embedding_type == "ROIConcat":
+                intersect_rgb_feat = intersect_rgb_feat.reshape(intersect_rgb_feat.shape[0],-1)
+                intersect_rgb_feat = torch.cat([intersect_rgb_feat, global_rgb_feat_bid],-1)
+            elif local_embedding_type == "ROIPooling":
+                maxpool = nn.MaxPool2d(roi_out_bbox)
+                intersect_rgb_feat = maxpool(intersect_rgb_feat).reshape(intersect_rgb_feat.shape[0],-1)
+                intersect_rgb_feat = torch.cat([intersect_rgb_feat, global_rgb_feat_bid],-1)
             
             #print("intersect_rgb_feat.shape", intersect_rgb_feat.shape)
             
@@ -735,8 +745,10 @@ def get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model,
         'intersect_leave_dist': intersect_leave_dist,
         'intersect_enter_pos': intersect_enter_pos,
         'intersect_leave_pos': intersect_leave_pos,
+        "intersect_raw_pos" : intersect_raw_pos,
         'intersect_enter_pos_embed': intersect_enter_pos_embed,
         'intersect_leave_pos_embed': intersect_leave_pos_embed,
+        "intersect_raw_pos_embed" : intersect_raw_pos_embed,
         'intersect_dir_embed': intersect_dir_embed,
         'full_rgb_feat': full_rgb_feat,
         "global_rgb_feat" : global_rgb_feat,
@@ -751,13 +763,28 @@ def get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model,
 #    print("t3 - t2", t3 - t2)
 
 
-def get_pred(data_dict, exp_type, epoch, offset_dec,prob_dec,device,offset_range=[0.,1.],maxpool_label_epo=6,scatter_type="Maxpool"):
+def get_pred(data_dict, exp_type, epoch, offset_dec,prob_dec,device,
+             raw_input_type=False,offset_range=[0.,1.],maxpool_label_epo=0,scatter_type="Maxpool"): 
        ######################################################## 
        # Concat embedding and send to decoder 
        ########################################################
-       inp_embed = torch.cat(( data_dict['intersect_voxel_feat'].contiguous(), data_dict['intersect_rgb_feat'].contiguous(),
+       if not raw_input_type:
+           inp_embed = torch.cat(( data_dict['intersect_voxel_feat'].contiguous(), data_dict['intersect_rgb_feat'].contiguous(),
                                data_dict['intersect_enter_pos_embed'].contiguous(),
                                data_dict['intersect_leave_pos_embed'].contiguous(), data_dict['intersect_dir_embed'].contiguous()),-1)
+       else:
+           inp_embed = torch.cat(( data_dict['intersect_voxel_feat'].contiguous(), data_dict['intersect_rgb_feat'].contiguous(),
+                               data_dict['intersect_enter_pos_embed'].contiguous(),
+                               data_dict['intersect_leave_pos_embed'].contiguous(), 
+                               data_dict['intersect_raw_pos_embed'].contiguous(),data_dict['intersect_dir_embed'].contiguous()),-1)
+           #print("intersect_raw_pos_embed", data_dict['intersect_raw_pos_embed'].contiguous())
+       
+#       print("data_dict['intersect_voxel_feat']", data_dict['intersect_voxel_feat'].shape)
+#       print("data_dict['intersect_rgb_feat']", data_dict['intersect_rgb_feat'].shape)
+#       print("data_dict['intersect_enter_pos_embed']", data_dict['intersect_enter_pos_embed'].shape)
+#       print("data_dict['intersect_leave_pos_embed']", data_dict['intersect_leave_pos_embed'].shape)
+#       print("data_dict['intersect_dir_embed']", data_dict['intersect_dir_embed'].shape)
+       
        pred_offset = offset_dec(inp_embed)
        pred_prob_end = prob_dec(inp_embed)
        
@@ -951,8 +978,9 @@ if __name__ == "__main__":
     np.random.seed(10)
     cfg, args = update_config()
     
-    testing_dataset = Voxel_dataset(train_dataset_dir="/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201/",
+    testing_dataset = Voxel_dataset(train_dataset_dir="/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/",
                                      val_dataset_dir="/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/",
+                                     real_dataset_dir="/DATA/disk1/hyperplane/Depth_C2RP/Data/Real_Test/depth/",
                                      joint_names=[f"panda_joint_3n_{i+1}" for i in range(14)],
                                      run=[0],
                                      init_mode="train", 
@@ -976,7 +1004,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")               
     
     embed_fn, embeddirs_fn, resnet_model, pnet_model,offset_dec,prob_dec = build_model(device)
-    refine_model = build_voxel_refine_network(cfg,device).cuda()
+    #refine_model = build_voxel_refine_network(cfg,device).cuda()
     
     refine_flag = True
     
@@ -993,7 +1021,7 @@ if __name__ == "__main__":
                                    {'params': prob_dec.parameters(), 'lr': 0.001},
                                    #{'params': resnet_woff.parameters(), 'lr': 0.001}, 
                                    ])
-    refine_optimizer = torch.optim.AdamW(refine_model.parameters(), lr=0.001)
+    #refine_optimizer = torch.optim.AdamW(refine_model.parameters(), lr=0.001)
     heatmap_criterion = torch.nn.MSELoss()
     woff_criterion = torch.nn.MSELoss()
     #with torch.no_grad():
@@ -1077,24 +1105,24 @@ if __name__ == "__main__":
         all_kps += data_dict["miss_ray_dir"].shape[0]
         occ_kps += len(torch.unique(data_dict["miss_ray_intersect_idx"]))
 #        # compute gt
-##        torch.cuda.synchronize()
-##        t_ = time.time()
-#        compute_gt(data_dict)
-##        torch.cuda.synchronize()
-##        end_time = time.time()
-#
-#        
-#        # get embedding
-##        torch.cuda.synchronize()
-##        t_ = time.time()
-#        get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model) 
-##        get_embedding_ours(data_dict, embed_fn, embeddirs_fn, full_xyz_feat, pnet_model)
-##        torch.cuda.synchronize()
-##        end_time = time.time()
-#
-#        
-#        # get pred
-#        get_pred(data_dict, "train", batch_idx, offset_dec, prob_dec, device)
+#        torch.cuda.synchronize()
+#        t_ = time.time()
+        compute_gt(data_dict)
+#        torch.cuda.synchronize()
+#        end_time = time.time()
+
+        
+        # get embedding
+#        torch.cuda.synchronize()
+#        t_ = time.time()
+        get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model) 
+#        get_embedding_ours(data_dict, embed_fn, embeddirs_fn, full_xyz_feat, pnet_model)
+#        torch.cuda.synchronize()
+#        end_time = time.time()
+
+        
+        # get pred
+        get_pred(data_dict, "train", batch_idx, offset_dec, prob_dec, device)
 #        
 #        
 ##        

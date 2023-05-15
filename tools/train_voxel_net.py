@@ -4,7 +4,7 @@ import yaml
 import time
 import multiprocessing as mp
 import os
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+#os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -86,7 +86,9 @@ def main(cfg):
                                      depth_range_type=dataset_cfg["DEPTH_RANGE_TYPE"],
                                      aug_type=dataset_cfg["AUG_TYPE"],
                                      aug_mode=dataset_cfg["AUG"],
-                                     change_intrinsic=dataset_cfg["CHANGE_INTRINSIC"])
+                                     change_intrinsic=dataset_cfg["CHANGE_INTRINSIC"],
+                                     uv_input=cfg["voxel_network"]["uv_input"],
+                                     )
                                     
     training_dataset.train()
     train_sampler = DistributedSampler(training_dataset)
@@ -143,6 +145,7 @@ def main(cfg):
     print('use {} gpus!'.format(num_gpus))
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[cfg["LOCAL_RANK"]],
                                                 output_device=cfg["LOCAL_RANK"],find_unused_parameters=False)
+    #model = torch.compile(model, mode="reduce-overhead")
                                                 
     heatmap_model = ResnetSimple(
                                 n_keypoints=cfg["DATASET"]["NUM_JOINTS"] * 2,
@@ -167,11 +170,12 @@ def main(cfg):
         print("Resume Model Checkpoint")
         checkpoint_paths = os.listdir(checkpoint_path)
         checkpoint_paths.sort() 
-        this_ckpt_path = os.path.join(checkpoint_path, "model.pth")
+        this_ckpt_path = os.path.join(checkpoint_path, "model.pth")  
         print('this_ckpt_path', this_ckpt_path)
         model, voxel_optimizer, scheduler, start_epoch, global_iter = load_voxel_model(model, voxel_optimizer, scheduler, this_ckpt_path, device)
         print("successfully loaded!")
     
+    #heatmap_model = torch.compile(heatmap_model, mode="reduce-overhead")
     
     # set network
     embed_fn = model.module.embed_fn
@@ -197,6 +201,11 @@ def main(cfg):
         train_sampler.set_epoch(epoch)
         model.train()
         for batch_idx, batch in enumerate(tqdm(training_loader)):
+            torch.cuda.synchronize()
+            t1 = time.time()
+#            if batch_idx >= 1:
+#                print("loading time", t1 - prev_time)
+        
             curr_loss = 0.0
         
             # heatmap
@@ -227,7 +236,7 @@ def main(cfg):
             data_dict = prepare_data(batch)
             
             # get valid pts other than kps
-            get_valid_points(data_dict, valid_sample_num=cfg["voxel_network"]["valid_sample_num"])
+            get_valid_points(data_dict, valid_sample_num=cfg["voxel_network"]["valid_sample_num"], rgb_in=cfg["voxel_network"]["rgb_in"])
             
             # get occupied voxel data
             get_occ_vox_bound(data_dict, res=cfg["voxel_network"]["res"])
@@ -243,16 +252,16 @@ def main(cfg):
             
             # get embedding
             #get_embedding_ours(data_dict, embed_fn, embeddirs_fn, full_xyz_feat, pnet_model)
-            get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model) 
+            get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model, local_embedding_type=cfg["voxel_network"]["local_embedding_type"]) 
             
             # get pred
-            get_pred(data_dict, "train", batch_idx, offset_dec, prob_dec, device)
+            get_pred(data_dict, "train", epoch-1, offset_dec, prob_dec, device, raw_input_type=cfg["voxel_network"]["raw_input_type"])
             torch.cuda.synchronize()
             t3 = time.time()
             
             
             # compute loss
-            loss_dict = compute_loss(data_dict, "train", batch_idx,device) 
+            loss_dict = compute_loss(data_dict, "train", epoch,device) 
             pos_loss = loss_cfg["pos_coeff"] * loss_dict['pos_loss'] 
             prob_loss = loss_cfg["prob_coeff"] * loss_dict['prob_loss']
             #print("pos_loss", pos_loss)
@@ -261,7 +270,7 @@ def main(cfg):
             #curr_loss = heatmap_loss + woff_loss + pos_loss + prob_loss
             curr_loss = pos_loss + prob_loss
             torch.cuda.synchronize()
-            t4 = time.time()
+            #t4 = time.time()
             #print("time", t2 - t1)
             
 #            xyz_optimizer.zero_grad()
@@ -314,6 +323,13 @@ def main(cfg):
                 gt_results, pred_results, true_blends_UV, pred_blends_UV = get_blended_images(gt_images, K, joints_3d_gt, joints_3d_pred, device)
                 log_and_visualize_single(writer, global_iter, gt_results, pred_results,true_blends_UV, pred_blends_UV)
             
+#            torch.cuda.synchronize()
+#            t2 = time.time()
+#            print("t3 - t1", t3 - t1)
+#            print("t4 - t3", t4 - t3)
+#            print("all_time", t2 - t1)
+            
+#            prev_time = t2
             
             global_iter += 1
 
@@ -413,7 +429,7 @@ def main(cfg):
                         data_dict = prepare_data(batch)
                         
                         # get valid pts other than kps
-                        get_valid_points(data_dict, valid_sample_num=cfg["voxel_network"]["valid_sample_num"])
+                        get_valid_points(data_dict, valid_sample_num=cfg["voxel_network"]["valid_sample_num"], rgb_in=cfg["voxel_network"]["rgb_in"])
                         
                         # get occupied voxel data
                         get_occ_vox_bound(data_dict, res=cfg["voxel_network"]["res"])
@@ -429,15 +445,15 @@ def main(cfg):
                         
                         # get embedding
                         #get_embedding_ours(data_dict, embed_fn, embeddirs_fn, full_xyz_feat, pnet_model)
-                        get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model) 
+                        get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model, local_embedding_type=cfg["voxel_network"]["local_embedding_type"]) 
                         
                         # get pred
-                        get_pred(data_dict, "test", batch_idx, offset_dec, prob_dec, device)
+                        get_pred(data_dict, "test", epoch-1, offset_dec, prob_dec, device, raw_input_type=cfg["voxel_network"]["raw_input_type"])
                         
                         torch.cuda.synchronize()
                         t4 = time.time()
                         # compute loss
-                        loss_dict = compute_loss(data_dict, "test", batch_idx,device) 
+                        loss_dict = compute_loss(data_dict, "test", epoch,device) 
                         
                         this_add = flat_add_from_pose(data_dict["pred_pos"].detach().cpu().numpy(), data_dict["gt_pos"].detach().cpu().numpy())
                         val_add = val_add + this_add
@@ -487,12 +503,14 @@ def main(cfg):
                         val_prob_loss.append(prob_loss.detach().item())
                     
                     torch.distributed.barrier()
-                    val_add = distributed_concat(torch.from_numpy(np.array(val_add)).to(device), len(val_sampler.dataset))
+                    val_add = distributed_concat(torch.from_numpy(np.array(val_add)).to(device), len(sampler.dataset))
                     
                     if dist.get_rank() == 0:
                         val_add = val_add.detach().cpu().numpy().tolist()
                         val_add_results = add_metrics(val_add, 0.06)
-                    
+                        print(len(val_add))
+                        print(val_add_results)
+#                    
                         writer.add_scalar(f'{mode}/Validation Loss', np.mean(val_curr_loss), epoch)
     #                    writer.add_scalar(f'Validation/Validation Heatmap Loss', np.mean(val_heatmap_loss), epoch)
     #                    writer.add_scalar(f'Validation/Validation Woff Loss', np.mean(val_woff_loss), epoch)
