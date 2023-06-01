@@ -18,6 +18,7 @@ voxel_network:
   pnet_in       : 6
   pnet_out      : 128
   pnet_gf       : 32
+  roi_inp_bbox  : 8
   roi_out_bbox  : 2
   local_embedding_type : ROIPooling
   imnet_gf      : 64
@@ -47,6 +48,9 @@ refine_voxel_network:
   refine_n_iter  : 2
   refine_use_sigmoid : false
   refine_forward_times : 2
+  refine_hard_neg : true
+  refine_hard_neg_ratio : 0.3
+  raw_input_type : false
   refine_imnet_gf : 64
   global_ratio  : 64
 
@@ -60,7 +64,7 @@ DATASET:
   #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Test_Data_0115/"  
   #TESTING ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
   MANIPULATOR   : Franka_Emika_Panda
-  CHANGE_INTRINSIC : true
+  CHANGE_INTRINSIC : false
   KEYPOINT_NAMES : ["Link0", "Link1", "Link2", "Link3", "Link4", "Link5", "Link6", "Link7", "panda_hand", "panda_finger_joint1", "panda_finger_joint2"]
   JOINT_NAMES   : ["panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4", "panda_joint5", "panda_joint6", "panda_joint7", "panda_finger_joint1"]
   JOINT_INFOS   : {"panda_joint1" : {"index" : 2, "direction" : 1, "base" : 0, "offset" : [0.0, 0.0, 0.14]}, "panda_joint2" : {"index" : 1, "direction" : 1, "base" : 1, "offset" : [0.0, 0.0, 0.0]}, "panda_joint3" : {"index" : 1, "direction" : -1, "base" : 3, "offset" : [0.0, 0.0, -0.1210]}, "panda_joint4" : {"index" : 1, "direction" : -1, "base" : 4, "offset" : [0.0, 0.0, 0.0]}, "panda_joint5" : {"index" : 1, "direction" : 1, "base" : 5, "offset" : [0.0, 0.0, -0.2590]}, "panda_joint6" : {"index" : 1, "direction" : -1, "base" :5, "offset" : [0.0, 0.0158, 0.0]}, "panda_joint7" : {"index" : 1, "direction" : -1, "base" : 7, "offset" : [0.0, 0.0, 0.0520]}, "panda_finger_joint1" : {"base" : 8, "offset" : [0.0, 0.0, 0.0584]}}
@@ -79,8 +83,14 @@ DATASET:
   AUG_TYPE      : 3d  
 
 TRAIN:
-  BATCH_SIZE    : 14             # batch size used to train
-  EPOCHS        : 80             # number of epochs to train
+  #BATCH_SIZE    : 14             # batch size used to train
+  #EPOCHS        : 80             # number of epochs to train
+  
+  BATCH_SIZE    : 8             # batch size used to train
+  EPOCHS        : 140             # number of epochs to train
+  FIRST_EPOCHS  : 800
+  SECOND_EPOCHS : 1100
+  GT_ANGLE_FLAG : false
   EVAL_INTERVAL : 10              # evaluation interval during training
   AMP           : false           # use AMP in training
   DDP           : false           # use DDP training
@@ -104,9 +114,10 @@ LOSS:
   prob_coeff      : 0.5
   
 OPTIMIZER:
-  XYZ_LR        : 0.001           # initial learning rate used in optimizer
+  REFINE_LR        : 0.001           # initial learning rate used in optimizer
   VOXEL_LR      : 0.001           # decay rate used in optimizer 
   DECAY_STEPS   : [15, 24, 42]  
+  LINEAR_DECAY  : false
 
 EVAL:         
   BATCH_SIZE    : 10  

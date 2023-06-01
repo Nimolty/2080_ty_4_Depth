@@ -301,17 +301,17 @@ def main(cfg):
         # Save Output and Checkpoint
         with torch.no_grad():
             # Save Checkpoint
-            if dist.get_rank() == 0:
-                if cfg["TRAIN"]["FIRST_EPOCHS"] < epoch:
-                    print("save refine checkpoint")
-                    save_weights(os.path.join(checkpoint_path, "refine_model.pth".format(str(epoch).zfill(3))), epoch, global_iter, refine_model, refine_optimizer, scheduler, cfg) 
-                    if epoch % 2 == 0:
-                        save_weights(os.path.join(checkpoint_path, "refine_model_{}.pth".format(str(epoch).zfill(3))), epoch, global_iter, refine_model, refine_optimizer, scheduler, cfg) 
-                else:
-                    print("save checkpoint")
-                    save_weights(os.path.join(checkpoint_path, "model.pth"), epoch, global_iter, model, voxel_optimizer, scheduler, cfg)
-                    if epoch % 2 == 0:
-                        save_weights(os.path.join(checkpoint_path, "model_{}.pth".format(str(epoch).zfill(3))), epoch, global_iter, model, voxel_optimizer, scheduler, cfg) 
+            #if dist.get_rank() == 0:
+            if cfg["TRAIN"]["FIRST_EPOCHS"] < epoch:
+                print("save refine checkpoint")
+                save_weights(os.path.join(checkpoint_path, "refine_model.pth".format(str(epoch).zfill(3))), epoch, global_iter, refine_model, refine_optimizer, scheduler, cfg) 
+                if epoch % 1 == 0:
+                    save_weights(os.path.join(checkpoint_path, "refine_model_{}.pth".format(str(cfg["LOCAL_RANK"]).zfill(3))), epoch, global_iter, refine_model, refine_optimizer, scheduler, cfg) 
+            else:
+                print("save checkpoint")
+                save_weights(os.path.join(checkpoint_path, "model.pth"), epoch, global_iter, model, voxel_optimizer, scheduler, cfg)
+                if epoch % 1 == 0:
+                    save_weights(os.path.join(checkpoint_path, "model_{}.pth".format(str(cfg["LOCAL_RANK"]).zfill(3))), epoch, global_iter, model, voxel_optimizer, scheduler, cfg) 
         
         #split = {"Validation" : [val_sampler, val_loader],}
         split = {"Real" : [real_sampler, real_loader], "Validation" : [val_sampler, val_loader]}

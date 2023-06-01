@@ -13,9 +13,9 @@ MODEL:
 voxel_network:
   multires      : 8
   multires_views : 4
-  rgb_in        : 5
+  rgb_in        : 3
   rgb_out       : 128
-  pnet_in       : 8
+  pnet_in       : 6
   pnet_out      : 128
   pnet_gf       : 32
   roi_out_bbox  : 2
@@ -27,9 +27,10 @@ voxel_network:
   full          : false
   prob_out_dim  : 1
   valid_sample_num  : 10000
-  res           : 12
+  res           : 10
   global_ratio  : 128
-  uv_input      : true
+  uv_input      : false
+  raw_input_type : true
 
 refine_voxel_network:
   pos_encode    : true
@@ -78,8 +79,10 @@ DATASET:
   AUG_TYPE      : 3d  
 
 TRAIN:
-  BATCH_SIZE    : 12             # batch size used to train
-  EPOCHS        : 100             # number of epochs to train
+  BATCH_SIZE    : 14             # batch size used to train
+  EPOCHS        : 140             # number of epochs to train
+  FISRT_EPOCHS  : 80
+  SECOND_EPOCHS : 110
   EVAL_INTERVAL : 10              # evaluation interval during training
   AMP           : false           # use AMP in training
   DDP           : false           # use DDP training
@@ -103,9 +106,10 @@ LOSS:
   prob_coeff      : 0.5
   
 OPTIMIZER:
-  XYZ_LR        : 0.001           # initial learning rate used in optimizer
+  REFINE_LR     : 0.001           # initial learning rate used in optimizer
   VOXEL_LR      : 0.001           # decay rate used in optimizer 
   DECAY_STEPS   : [15, 24, 42]  
+  LINEAR_DECAY  : true
 
 EVAL:         
   BATCH_SIZE    : 10  

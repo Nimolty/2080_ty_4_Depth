@@ -13,11 +13,13 @@ MODEL:
 voxel_network:
   multires      : 8
   multires_views : 4
-  rgb_in        : 5
+  rgb_in        : 3
   rgb_out       : 128
-  pnet_in       : 8
+  pnet_in_rgb_flag : true
+  pnet_in       : 6
   pnet_out      : 128
   pnet_gf       : 32
+  roi_inp_bbox  : 8
   roi_out_bbox  : 2
   local_embedding_type : ROIPooling
   imnet_gf      : 64
@@ -27,9 +29,11 @@ voxel_network:
   full          : false
   prob_out_dim  : 1
   valid_sample_num  : 10000
-  res           : 12
-  global_ratio  : 128
-  uv_input      : true
+  res           : 10
+  global_ratio  : 384
+  uv_input      : false
+  raw_input_type : true
+  
 
 refine_voxel_network:
   pos_encode    : true
@@ -47,14 +51,18 @@ refine_voxel_network:
   refine_use_sigmoid : false
   refine_forward_times : 2
   refine_imnet_gf : 64
+  refine_hard_neg : true
+  refine_hard_neg_ratio : 0.3
+  raw_input_type : true
   global_ratio  : 64
+  pos_coeff     : 20
 
 DATASET:
   NAME          : HELEN                                               # dataset name to be trained with (camvid, cityscapes, ade20k)
   TRAINING_ROOT : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"     
   VAL_ROOT      : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn/"   # dataset root path
   REAL_ROOT     : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Real_Test/depth/"
-  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
+  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"               
   #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Small_Testing_Data_0115/"  
   #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Test_Data_0115/"  
   #TESTING ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
@@ -78,8 +86,11 @@ DATASET:
   AUG_TYPE      : 3d  
 
 TRAIN:
-  BATCH_SIZE    : 12             # batch size used to train
-  EPOCHS        : 100             # number of epochs to train
+  BATCH_SIZE    : 10             # batch size used to train
+  EPOCHS        : 140             # number of epochs to train
+  FIRST_EPOCHS  : 15
+  SECOND_EPOCHS : 20
+  GT_ANGLE_FLAG : false
   EVAL_INTERVAL : 10              # evaluation interval during training
   AMP           : false           # use AMP in training
   DDP           : false           # use DDP training
@@ -103,9 +114,10 @@ LOSS:
   prob_coeff      : 0.5
   
 OPTIMIZER:
-  XYZ_LR        : 0.001           # initial learning rate used in optimizer
+  REFINE_LR        : 0.001           # initial learning rate used in optimizer
   VOXEL_LR      : 0.001           # decay rate used in optimizer 
   DECAY_STEPS   : [15, 24, 42]  
+  LINEAR_DECAY  : false
 
 EVAL:         
   BATCH_SIZE    : 10  
