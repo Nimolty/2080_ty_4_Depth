@@ -69,6 +69,11 @@ def main(cfg):
     training_data_dir = dataset_cfg["TRAINING_ROOT"]
     camera_K = load_camera_intrinsics(os.path.join(training_data_dir, "_camera_settings.json"))
     
+    try:
+        intrin_aug_params = cfg["voxel_network"]["camera_intrin_aug"]
+    except:
+        intrin_aug_params = dict()
+    
     # Build training and validation set
     training_dataset = Voxel_dataset(train_dataset_dir=dataset_cfg["TRAINING_ROOT"],
                                      val_dataset_dir=dataset_cfg["VAL_ROOT"],
@@ -90,6 +95,7 @@ def main(cfg):
                                      aug_mode=dataset_cfg["AUG"],
                                      change_intrinsic=dataset_cfg["CHANGE_INTRINSIC"],
                                      uv_input=cfg["voxel_network"]["uv_input"],
+                                     intrin_aug_params=intrin_aug_params,
                                      )
                                     
     training_dataset.train()
@@ -231,8 +237,17 @@ def main(cfg):
             curr_loss = 0.0
             joints_3d = batch['joints_3D_Z'].to(device).float()
                    
-            
+            #print("K_depth", batch["K_depth"])
             loss_dict, data_dict = model(batch, "train", epoch-1)
+            
+            
+#            if batch_idx < 1:
+#                valid_xyz = data_dict["valid_xyz"]
+#                print("valid_xyz.shape", valid_xyz.shape)
+#                bs = data_dict["bs"]
+#                valid_xyz = valid_xyz.reshape(bs, -1, 3)
+#                for b in range(bs):
+#                    np.savetxt(f"/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/Pointnet2_master/pts/{b}.txt", valid_xyz[b].detach().cpu().numpy())
             
             pos_loss = loss_cfg["pos_coeff"] * loss_dict['pos_loss'] 
             prob_loss = loss_cfg["prob_coeff"] * loss_dict['prob_loss']

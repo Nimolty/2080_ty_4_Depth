@@ -281,11 +281,50 @@ class Resnet34_16s(nn.Module):
         
         return x
 
+class Mlp(nn.Module):
+
+    def __init__(self,
+                 in_features,
+                 hidden_features=None,
+                 out_features=None,
+                 act_layer=nn.ReLU,
+                 drop=0.0):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Linear(in_features, hidden_features)
+        self.act = act_layer()
+        self.drop1 = nn.Dropout(drop)
+        self.fc2 = nn.Linear(hidden_features, out_features)
+        self.drop2 = nn.Dropout(drop)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop1(x)
+        x = self.fc2(x)
+        x = self.drop2(x)
+        return x
+
+class SELayer(nn.Module):
+
+    def __init__(self, channels, act_layer=nn.ReLU, gate_layer=nn.Sigmoid):
+        super().__init__()
+        self.conv_reduce = nn.Conv2d(channels, channels, 1, bias=True)
+        self.act1 = act_layer()
+        self.conv_expand = nn.Conv2d(channels, channels, 1, bias=True)
+        self.gate = gate_layer()
+
+    def forward(self, x, x_se):
+        x_se = self.conv_reduce(x_se)
+        x_se = self.act1(x_se)
+        x_se = self.conv_expand(x_se)
+        return x * self.gate(x_se)
 
 class Resnet34_8s(nn.Module):
     
     
-    def __init__(self, inp_ch=4, out_ch=1, global_ratio=64):
+    def __init__(self, inp_ch=4, out_ch=1, global_ratio=64, mid_channels=256, camera_intrin_aware=False):
         
         super(Resnet34_8s, self).__init__()
         
@@ -304,6 +343,14 @@ class Resnet34_8s(nn.Module):
         
         self._normal_initialization(self.resnet34_8s.fc)
         self.maxpool = nn.MaxPool2d(global_ratio)
+        self.camera_intrin_aware = camera_intrin_aware
+        if camera_intrin_aware:
+            self.rgb_bn = nn.BatchNorm1d(4)
+            self.rgb_mlp = Mlp(4, mid_channels, out_ch)
+            self.rgb_se = SELayer(out_ch)  # NOTE: add camera-aware
+        
+        
+        
         
         
     def _normal_initialization(self, layer):
@@ -311,7 +358,7 @@ class Resnet34_8s(nn.Module):
         layer.weight.data.normal_(0, 0.01)
         layer.bias.data.zero_()
         
-    def forward(self, x, feature_alignment=False):
+    def forward(self, x, feature_alignment=False, camera_intrin=False):
         torch.cuda.synchronize()
         tt = time.time()
         input_spatial_dim = x.size()[2:]
@@ -323,6 +370,18 @@ class Resnet34_8s(nn.Module):
         x = self.resnet34_8s(x)
         
         x = nn.functional.interpolate(input=x, size=input_spatial_dim, mode='bilinear', align_corners=False)
+        
+        if camera_intrin is not False and self.camera_intrin_aware:
+            # camera_intrin.shape : B x 4 x 4
+            camera_intrin_input = torch.cat([camera_intrin[:, 0, 0:1],
+                                             camera_intrin[:, 1, 1:2],
+                                             camera_intrin[:, 0, 2:3],
+                                             camera_intrin[:, 1, 2:3]
+                                            ], dim=-1)
+            camera_intrin_input = self.rgb_bn(camera_intrin_input)
+            camera_intrin_input = self.rgb_mlp(camera_intrin_input)[..., None, None]
+            x = self.rgb_se(x, camera_intrin_input) 
+
         global_feat = self.maxpool(x)
         
         torch.cuda.synchronize()

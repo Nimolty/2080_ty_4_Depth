@@ -1,0 +1,129 @@
+DEVICE          : cuda              # device used for training and evaluation (cpu, cuda, cuda0, cuda1, ...)
+SAVE_DIR        : "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/"        # output folder name used for saving the model, logs and inference results
+
+MODEL:                                                                          
+  SEED          : 317
+  NAME          : stacked_hourglass                                   # name of the model you are using
+  TASK          : 3d_RPE
+  INPUT_TYPE    : XYZ
+  OUTPUT_TYPE   : 2.5dH
+  BLOCKS        : 1
+  STACKS        : 2
+
+voxel_network:
+  camera_intrin_aware : false
+  multires      : 8
+  multires_views : 4
+  rgb_model_type : Resnet34_8s
+  rgb_model_global_flag : true
+  rgb_in        : 3
+  rgb_out       : 128
+  pnet_in_rgb_flag : true
+  pnet_in       : 6
+  pnet_out      : 128
+  pnet_gf       : 32
+  roi_inp_bbox  : 16
+  roi_out_bbox  : 2
+  local_embedding_type : NOROI
+  imnet_gf      : 64
+  n_iter        : 2
+  use_sigmoid   : false #shoule be false but does it matter?
+  n_offs         : 2
+  full          : false
+  prob_out_dim  : 1
+  valid_sample_num  : 10000
+  res           : 10
+  global_ratio  : 128
+  uv_input      : false
+  raw_input_type : true
+  
+
+refine_voxel_network:
+  pos_encode    : true
+  multires      : 8
+  multires_views : 4
+  refine_pnet_model_type : twostage
+  refine_pnet_in : 6
+  refine_pnet_out : 128
+  refine_pnet_gf : 32
+  refine_rgb_embedding_type : ROIAlign
+  refine_rgb_out : 32
+  refine_roi_out_bbox : 2
+  refine_offdec_type : IEF
+  refine_n_iter  : 2
+  refine_use_sigmoid : false
+  refine_forward_times : 2
+  refine_imnet_gf : 64
+  refine_hard_neg : true
+  refine_hard_neg_ratio : 0.3
+  raw_input_type : true
+  global_ratio  : 64
+  pos_coeff     : 20
+
+DATASET:
+  NAME          : HELEN                                               # dataset name to be trained with (camvid, cityscapes, ade20k)
+  TRAINING_ROOT : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"     
+  VAL_ROOT      : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"   # dataset root path
+  REAL_ROOT     : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Real_Test/depth/"
+  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
+  #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Small_Testing_Data_0115/"  
+  #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Test_Data_0115/"  
+  #TESTING ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
+  MANIPULATOR   : Franka_Emika_Panda
+  CHANGE_INTRINSIC : true
+  KEYPOINT_NAMES : ["Link0", "Link1", "Link2", "Link3", "Link4", "Link5", "Link6", "Link7", "panda_hand", "panda_finger_joint1", "panda_finger_joint2"]
+  JOINT_NAMES   : ["panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4", "panda_joint5", "panda_joint6", "panda_joint7", "panda_finger_joint1"]
+  JOINT_INFOS   : {"panda_joint1" : {"index" : 2, "direction" : 1, "base" : 0, "offset" : [0.0, 0.0, 0.14]}, "panda_joint2" : {"index" : 1, "direction" : 1, "base" : 1, "offset" : [0.0, 0.0, 0.0]}, "panda_joint3" : {"index" : 1, "direction" : -1, "base" : 3, "offset" : [0.0, 0.0, -0.1210]}, "panda_joint4" : {"index" : 1, "direction" : -1, "base" : 4, "offset" : [0.0, 0.0, 0.0]}, "panda_joint5" : {"index" : 1, "direction" : 1, "base" : 5, "offset" : [0.0, 0.0, -0.2590]}, "panda_joint6" : {"index" : 1, "direction" : -1, "base" :5, "offset" : [0.0, 0.0158, 0.0]}, "panda_joint7" : {"index" : 1, "direction" : -1, "base" : 7, "offset" : [0.0, 0.0, 0.0520]}, "panda_finger_joint1" : {"base" : 8, "offset" : [0.0, 0.0, 0.0584]}}
+  MASK_DICT     : { "Link0": 0.0039215688, "Link1": 0.0078431377, "Link2": 0.0117647061, "Link3": 0.0156862754, "Link4": 0.0196078438, "Link5": 0.0235294122, "Link6": 0.0274509806, "Link7": 0.0313725508, "panda_hand" : 0.0352941192,"panda_finger_joint1" : 0.0392156876,"panda_finger_joint2" : 0.0431372560}
+  TYPE          : D
+  NUM_JOINTS    : 14
+  INPUT_RESOLUTION : [384, 216] # W x H
+  RAW_RESOLUTION : [640, 360] # W x H 
+  NORM_TYPE     : min_max
+  REF_FRAME     : left_hand
+  DEPTH_RANGE   : [500, 3380, 7.5]
+  DEPTH_RANGE_TYPE : padding
+  SURROUNDING_REMOVALS : false
+  SIGMA         : 3.0
+  AUG           : true
+  AUG_TYPE      : 3d  
+
+TRAIN:
+  BATCH_SIZE    : 12             # batch size used to train
+  EPOCHS        : 130             # number of epochs to train
+  FIRST_EPOCHS  : 70
+  SECOND_EPOCHS : 100
+  GT_ANGLE_FLAG : false
+  EVAL_INTERVAL : 10              # evaluation interval during training
+  AMP           : false           # use AMP in training
+  DDP           : false           # use DDP training
+  NUM_WORKERS   : 4
+
+DR:
+  ENGINE          : Kaolin
+  CAD_MODEL_PATHS : [../materials/franka_panda/Link0.obj, ../materials/franka_panda/Link1.obj, ../materials/franka_panda/Link2.obj,
+                     ../materials/franka_panda/Link3.obj, ../materials/franka_panda/Link4.obj, ../materials/franka_panda/Link5.obj,
+                     ../materials/franka_panda/Link6.obj, ../materials/franka_panda/Link7.obj, ../materials/franka_panda/panda_hand.obj,
+                     ../materials/franka_panda/panda_finger_joint1.obj, ../materials/franka_panda/panda_finger_joint2.obj
+                    ] 
+  RT_LR           : 0.01
+  GA_LR           : 0.01
+  NUM_OF_SAMPLE_PTS : 3000
+
+LOSS:
+  hm_coeff        : 1.0
+  woff_coeff      : 0.01
+  pos_coeff       : 100.0
+  prob_coeff      : 0.5
+  
+OPTIMIZER:
+  REFINE_LR        : 0.001           # initial learning rate used in optimizer
+  VOXEL_LR      : 0.001           # decay rate used in optimizer 
+  DECAY_STEPS   : [15, 24, 42]  
+  LINEAR_DECAY  : false
+
+EVAL:         
+  BATCH_SIZE    : 10  
+  NUM_WORKERS   : 4   
+
+

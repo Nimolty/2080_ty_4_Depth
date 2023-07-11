@@ -115,6 +115,9 @@ def pointcloud2depthmap(points, img_width, img_height, fx, fy, cx=None, cy=None,
 
     points = points[np.argsort(points[:, 2])]
     pixels = points2pixels(points, img_width, img_height, fx, fy, cx, cy)
+    
+    #print("pixels.shape", pixels.shape)
+    
     pixels = pixels.round().astype(np.int32)
     unique_pixels, indexes, counts = np.unique(pixels, return_index=True, return_counts=True, axis=0)
 
@@ -186,6 +189,46 @@ def points2pixels(points, img_width, img_height, fx, fy, cx=None, cy=None):
         world2pixel(points[:,0], points[:, 1], points[:, 2], img_width, img_height, fx, fy, cx, cy)
     return pixels
 
+def nearest_hole_filling(depthmap, kernel_size=5, nearest_num=5):
+    """
+    Depth map (small-)hole filling
+    Args:
+        depthmap (np.ndarray): depth map with dtype np.uint8 (1 or 3 channels) or np.float32 (1 channel)
+    Returns:
+        np.ndarray: hole-filled image
+    """
+    orig_shape_len = len(depthmap.shape)
+    assert depthmap.dtype == np.uint8 or depthmap.dtype == np.uint16 or \
+           (depthmap.dtype == np.float32 and orig_shape_len == 2) or \
+           (depthmap.dtype == np.float32 and orig_shape_len == 3 and depthmap.shape[2] == 1)
+    assert orig_shape_len == 2 or (orig_shape_len == 3 and depthmap.shape[2] in (1, 3))
+
+    if orig_shape_len == 3:
+        depthmap = depthmap[:, :, 0]
+    mask = (depthmap > 0).astype(np.uint8)
+    # default
+    mask_filled = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((kernel_size, kernel_size)))
+    
+    points_to_fill = (mask_filled * (depthmap == 0)).astype(np.uint8)
+    points_ori = np.ones_like(points_to_fill) - points_to_fill
+    
+    index_list = [[i, j, abs(i) + abs(j)] 
+                  for i in range(-nearest_num//2, nearest_num//2+1)
+                  for j in range(-nearest_num//2, nearest_num//2+1)
+                  ]
+    index_list = sorted(index_list, key=lambda x : x[2]) 
+    del index_list[0]
+    
+    depthmap_res = depthmap * points_ori
+    
+    for index in index_list:
+        M = np.float32([[1, 0, index[0]], [0, 1, index[1]]]) # 向右平移index[0]，向下平移index[1]
+        depthmap_dst = cv2.warpAffine(depthmap, M, (depthmap.shape[1], depthmap.shape[0]))
+        this_fill = ((points_to_fill) * (depthmap_dst > 0)).astype(np.uint8)
+        depthmap_res += depthmap_dst * this_fill
+        points_to_fill -= this_fill
+    
+    return depthmap_res
 
 def hole_filling(depthmap, kernel_size=5):
     """
@@ -204,10 +247,18 @@ def hole_filling(depthmap, kernel_size=5):
     if orig_shape_len == 3:
         depthmap = depthmap[:, :, 0]
     mask = (depthmap > 0).astype(np.uint8)
+    # default
     mask_filled = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((kernel_size, kernel_size)))
+    
+    #mask_filled = cv2.morphologyEx(mask, cv2.MORPH_BLACKHAT, np.ones((kernel_size, kernel_size)))
+    
     points_to_fill = (mask_filled * (depthmap == 0)).astype(np.uint8)
+    #print("points_fo_fill", points_to_fill.shape)
+    
+    
     if depthmap.dtype == np.float32:
         depthmap = cv2.inpaint(depthmap, points_to_fill, 2, cv2.INPAINT_NS)
+        #depthmap = cv2.inpaint(depthmap, points_to_fill, 2, cv2.INPAINT_TELEA)
     else:
         depthmap = cv2.inpaint(depthmap, points_to_fill, 2, cv2.INPAINT_TELEA)
     if orig_shape_len == 3:
@@ -482,7 +533,7 @@ def quaternionToRotation(q):
 
 
 # Augmentation
-def augment_3d(depth_intrinsic, points, depth16_img, joints_3D_Z, R2C_Mat, R2C_Trans):
+def augment_3d(depth_intrinsic, points, depth16_img, joints_3D_Z, R2C_Mat, R2C_Trans, intrin_aug_params=dict()):
     if len(points) > 0:
         points_mean = points.mean(axis=0)
         points -= points_mean
@@ -538,19 +589,104 @@ def augment_3d(depth_intrinsic, points, depth16_img, joints_3D_Z, R2C_Mat, R2C_T
         # from pointcloud to depthmap
         points += points_mean
         joints_3D_Z += points_mean
+
+        fx=depth_intrinsic[0, 0]
+        fy=depth_intrinsic[1, 1]
+        cx=depth_intrinsic[0, 2]
+        cy=depth_intrinsic[1, 2] 
+        
+        if intrin_aug_params:
+            noise_f = 2 * np.random.random() - 1
+            noise_cx = 2 * np.random.random() - 1
+            noise_cy = 2 * np.random.random() - 1
+
+            aug_degree = noise_f * (intrin_aug_params["f_up"] - intrin_aug_params["f_low"]) + intrin_aug_params["f_low"]
+            fx = depth16_img.shape[1] / 2 / np.tan(aug_degree)
+            fy = fx
+            
+            cx += noise_cx * intrin_aug_params["cx"]
+            cy += noise_cy * intrin_aug_params["cy"]
+        
         depth16_img = pointcloud2depthmap(points, depth16_img.shape[1], depth16_img.shape[0],
-                                          fx=depth_intrinsic[0, 0],
-                                          fy=depth_intrinsic[1, 1],
-                                          cx=depth_intrinsic[0, 2],
-                                          cy=depth_intrinsic[1, 2]).astype(depth16_img.dtype)
-        depth16_img = hole_filling(depth16_img, kernel_size=2)
+                                          fx=fx,
+                                          fy=fy,
+                                          cx=cx,
+                                          cy=cy).astype(depth16_img.dtype)
+                                          
+        # depth16_img = hole_filling(depth16_img, kernel_size=2)
+#        for i in range(3):                      
+#            depth16_img = nearest_hole_filling(depth16_img, kernel_size=2, nearest_num=4)
         
         # R2C_Mat, R2C_Trans
         R2C_Mat_after_aug = rot @ R2C_Mat
         R2C_Trans_after_aug = rot @ R2C_Trans + tr + (np.eye(3) - rot) @ points_mean
         
+        depth_intrinsic[0, 0] = fx
+        depth_intrinsic[1, 1] = fy
+        depth_intrinsic[0, 2] = cx
+        depth_intrinsic[1, 2] = cy
+        
 
-    return depth16_img, joints_3D_Z, R2C_Mat_after_aug, R2C_Trans_after_aug
+    return depth_intrinsic, depth16_img, joints_3D_Z, R2C_Mat_after_aug, R2C_Trans_after_aug
+
+def augment_3d_diff(joints_3D_Z, R2C_Mat, R2C_Trans):
+    if len(joints_3D_Z) > 0:
+        points_mean = joints_3D_Z.mean(axis=0)
+        joints_3D_Z -= points_mean
+
+        p_rot = random.random()
+        if p_rot < 1/3:
+            # rotation around x axis
+            angle = (random.random() * 2 - 1) * 5
+            a = angle / 180 * np.pi
+            rot = np.asarray([
+                [1, 0, 0],
+                [0, np.cos(a), -np.sin(a)],
+                [0, np.sin(a), np.cos(a)],
+            ])  # x axis
+        elif p_rot >= 2/3:
+            # rotation around y axis
+            angle = (random.random() * 2 - 1) * 5
+            a = angle / 180 * np.pi
+            rot = np.asarray([
+                [np.cos(a), 0, np.sin(a)],
+                [0, 1, 0],
+                [-np.sin(a), 0, np.cos(a)],
+            ])  # y axis
+        else:
+            # rotation around z axis
+            angle = (random.random() * 2 - 1) * 0
+            a = angle / 180 * np.pi
+            rot = np.asarray([
+                [np.cos(a), -np.sin(a), 0],
+                [np.sin(a), np.cos(a), 0],
+                [0, 0, 1],
+            ])  # z axis
+        joints_3D_Z = joints_3D_Z @ rot.T
+
+        p_tr = random.random()
+        if p_tr < 1/3:
+            # translation over x axis
+            tr_x = (random.random() * 2 - 1) * 0.08
+            tr = np.array([tr_x, 0, 0])
+        elif p_tr >= 2/3:
+            # translation over y axis
+            tr_y = (random.random() * 2 - 1) * 0
+            tr = np.array([0, tr_y, 0])
+        else:
+            # translation over z axis
+            tr_z = (random.random() * 2 - 1) * 0.08
+            tr = np.array([0, 0, tr_z])
+        joints_3D_Z = joints_3D_Z + tr
+
+        # from pointcloud to depthmap
+        joints_3D_Z += points_mean
+
+
+        R2C_Mat_after_aug = rot @ R2C_Mat
+        R2C_Trans_after_aug = rot @ R2C_Trans + tr + (np.eye(3) - rot) @ points_mean
+
+    return joints_3D_Z, R2C_Mat_after_aug, R2C_Trans_after_aug
 
 
 # Normalization
@@ -572,7 +708,7 @@ def apply_depth_normalization_16bit_image(img, norm_type):
     """
     if norm_type == "min_max":
         min_value = 0
-        max_value = 5000
+        max_value = 8000
         tmp = (img - min_value) / (max_value - min_value)
     elif norm_type == "mean_std":
         tmp = (img - img.mean()) / img.std()

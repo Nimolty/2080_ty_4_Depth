@@ -20,7 +20,7 @@ from torch.nn.parameter import Parameter
 class MLP_TOY(nn.Module):
     def __init__(self, dim, h1_dim, out_dim) -> None:
         super().__init__()
-        out_dim = out_dim or dim
+        out_dim = out_dim #or dim
         h2_dim = h1_dim // 2
         h3_dim = h2_dim // 4
         self.fc1 = nn.Linear(dim, h1_dim)
@@ -365,11 +365,12 @@ def distributed_concat(tensor, num_total_examples, dim=0):
     output_tensors = [tensor.clone() for _ in range(torch.distributed.get_world_size())]
     torch.distributed.all_gather(output_tensors, tensor)
     concat = torch.cat(output_tensors, dim=dim)
+    #print("concat.shape", concat.shape)
     # truncate the dummy elements added by SequentialDistributedSampler
     if dim == 0:
-        return concat[:num_total_examples]
+        return concat
     elif dim == 1:
-        return concat[:, :num_total_examples]    
+        return concat   
         
         
         

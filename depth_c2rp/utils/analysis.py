@@ -55,32 +55,76 @@ def batch_add_from_pose(dt_joints_wrt_cam, gt_joints_wrt_cam):
     kp_3d_lr_errors_mean = np.mean(kp_3d_l2_errors, axis=1) # B
     return kp_3d_lr_errors_mean.tolist()
 
+def batch_repeat_add_from_pose(dt_joints_wrt_cam, gt_joints_wrt_cam, bs, num_samples):
+    # dt_joints_wrt_cam, gt_joints_wrt_cam.shape : (bsxnum_samples) x N x 3
+    assert 3 == dt_joints_wrt_cam.shape[2]
+    kp_3d_errors = dt_joints_wrt_cam  - gt_joints_wrt_cam
+    kp_3d_errors = kp_3d_errors.reshape(num_samples, bs, -1, 3) # num_samples x bs x N x 3
+    kp_3d_errors = kp_3d_errors.transpose(1, 2, 0, 3) # bs x N x num_samples x 3
+    kp_3d_l2_errors = np.linalg.norm(kp_3d_errors, axis=-1) # bs x N x num_samples
+    kp_3d_lr_errors_mean = np.mean(kp_3d_l2_errors, axis=-1) # bs x N
+    kp_3d_lr_errors_mean = np.min(kp_3d_lr_errors_mean, axis=-1) # bs
+    return kp_3d_lr_errors_mean.tolist()
+
 def flat_add_from_pose(dt_joints_wrt_cam, gt_joints_wrt_cam):
     # dt_joints_wrt_cam, gt_joints_wrt_cam : N x 3
     kp_3d_errors = dt_joints_wrt_cam - gt_joints_wrt_cam
     kp_3d_l2_errors = np.linalg.norm(kp_3d_errors, axis=-1)
     return kp_3d_l2_errors.tolist()
 
+def batch_repeat_mAP_from_pose(dt_joints_wrt_cam, gt_joints_wrt_cam, bs, num_samples, thresholds):
+    this_mAP = []
+    assert 3 == dt_joints_wrt_cam.shape[2]
+    kp_3d_errors = dt_joints_wrt_cam  - gt_joints_wrt_cam
+    kp_3d_errors = kp_3d_errors.reshape(num_samples, bs, -1, 3) # num_samples x bs x N x 3
+    kp_3d_errors = kp_3d_errors.transpose(1, 2, 0, 3) # bs x N x num_samples x 3
+    kp_3d_l2_errors = np.linalg.norm(kp_3d_errors, axis=-1) # bs x N x num_samples
+    kp_3d_lr_errors_mean = np.mean(kp_3d_l2_errors, axis=-1) # bs x N
+    dist_3D = np.min(kp_3d_lr_errors_mean, axis=-1) # bs
+    for thresh in thresholds:
+        avg_AP = (dist_3D < thresh)
+        this_mAP.append(avg_AP.tolist())
+    return np.array(this_mAP).T.tolist()
+
 def batch_mAP_from_pose(dt_joints_wrt_cam, gt_joints_wrt_cam, thresholds):
     # dt_joints_wrt_cam, gt_joints_wrt_cam.shape : B x N x 3
     this_mAP = []
     dist_3D = np.sqrt(np.sum((dt_joints_wrt_cam - gt_joints_wrt_cam)**2, axis=-1)) # B x N 
+    dist_3D = np.mean(dist_3D, axis=-1) # B
     for thresh in thresholds:
-        avg_AP = np.mean(dist_3D < thresh) 
-        this_mAP.append(avg_AP)
-    return this_mAP
+        avg_AP = (dist_3D < thresh)
+        this_mAP.append(avg_AP.tolist())
+    #print(np.array(this_mAP).T.shape)
+    return np.array(this_mAP).T.tolist()
 
+def batch_repeat_acc_from_joint_angles(dt_joints_pos, gt_joints_pos, bs, num_samples, thresholds):
+    # dt_joints_pos, gt_joints_pos.shape : (bsxnum_samples) x 7 x 1
+    this_acc = []
+    dist_angles = np.abs(dt_joints_pos - gt_joints_pos)
+    dist_angles = dist_angles.reshape(num_samples, bs, -1, 1) # num_samples x bs x 7 x 1
+    dist_angles = dist_angles.transpose(1, 2, 0, 3)[:, :, :, 0] # bs x 7 x num_samples
+    dist_angles = np.min(dist_angles, axis=-1) # bs x 7
+    #print("dist_angles.shape", dist_angles.shape)
+    for thresh in thresholds:
+        radian_thresh = math.radians(thresh)
+        avg_acc = np.mean(dist_angles < radian_thresh, axis=-1) 
+        this_acc.append(avg_acc.tolist())
+    return np.array(this_acc).T.tolist()
+    
 def batch_acc_from_joint_angles(dt_joints_pos, gt_joints_pos, thresholds):
     # dt_joitns_pos, gt_joints_pos : B x 7 x 1
     this_acc = []
     #dist_angles = np.abs(dt_joints_pos,gt_joints_pos)[:, :-1, 0] # B x 7 Find the bug！
-    dist_angles = np.abs(dt_joints_pos - gt_joints_pos)#[:, :, 0] # B x   
+    dist_angles = np.abs(dt_joints_pos - gt_joints_pos)[:, :, 0]#[:, :, 0] # B x   
     #print("dist_angles", dist_angles)
     for thresh in thresholds:
         radian_thresh = math.radians(thresh)
-        avg_acc = np.mean(dist_angles < radian_thresh) 
-        this_acc.append(avg_acc)
-    return this_acc
+        avg_acc = np.mean(dist_angles < radian_thresh, axis=-1) 
+        #print(avg_acc.shape)
+        #print(avg_acc)
+        this_acc.append(avg_acc.tolist())
+    #print(np.array(this_acc).T.shape)
+    return np.array(this_acc).T.tolist()
 
 def add_metrics(add, add_auc_threshold=0.1):
     # add list

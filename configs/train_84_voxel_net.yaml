@@ -11,8 +11,10 @@ MODEL:
   STACKS        : 2
 
 voxel_network:
+  camera_intrin_aware : false
   multires      : 8
   multires_views : 4
+  rgb_model_type : Resnet34_8s
   rgb_in        : 3
   rgb_out       : 128
   pnet_in_rgb_flag : true
@@ -59,8 +61,8 @@ refine_voxel_network:
 
 DATASET:
   NAME          : HELEN                                               # dataset name to be trained with (camvid, cityscapes, ade20k)
-  TRAINING_ROOT : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201/"     
-  VAL_ROOT      : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_Syn/"   # dataset root path
+  TRAINING_ROOT : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"     
+  VAL_ROOT      : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"   # dataset root path
   REAL_ROOT     : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Real_Test/depth/"
   TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
   #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Small_Testing_Data_0115/"  
@@ -86,7 +88,7 @@ DATASET:
   AUG_TYPE      : 3d  
 
 TRAIN:
-  BATCH_SIZE    : 16             # batch size used to train
+  BATCH_SIZE    : 8             # batch size used to train
   EPOCHS        : 130             # number of epochs to train
   FIRST_EPOCHS  : 70
   SECOND_EPOCHS : 100

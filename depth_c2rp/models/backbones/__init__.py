@@ -5,6 +5,7 @@ from .poolformer import PoolFormer
 from .stacked_hourglass import HourglassNet
 from .hrnet import HRNet
 from .dream_hourglass import ResnetSimple, DreamHourglass, ResnetSimpleWoff
+from .pn_resnet import PointResnet
 __all__ = [
-    'ResNet', "ResT", "ConvNeXt", "PoolFormer", "HourglassNet", "HRNet", "ResnetSimple", "DreamHourglass", "ResnetSimpleWoff"
+    'ResNet', "ResT", "ConvNeXt", "PoolFormer", "HourglassNet", "HRNet", "ResnetSimple", "DreamHourglass", "ResnetSimpleWoff", "PointResnet"
 ]

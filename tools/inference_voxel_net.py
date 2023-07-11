@@ -7,6 +7,7 @@ import os
 #os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import numpy as np
 import cv2
+import json
 import matplotlib.pyplot as plt
 import copy
 from pathlib import Path
@@ -133,6 +134,7 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
     kps_mAP = []
     uv_pck = []
     z_pck = []
+    acc = []
     
     
     # lst
@@ -180,8 +182,8 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
         print("Resume Model Checkpoint")
         checkpoint_paths = os.listdir(checkpoint_path)
         checkpoint_paths.sort() 
-        this_ckpt_path = os.path.join(checkpoint_path, "model_040.pth")  
-        #this_ckpt_path = os.path.join(checkpoint_path, "model.pth")  
+        #this_ckpt_path = os.path.join(checkpoint_path, "model_040.pth")   
+        this_ckpt_path = os.path.join(checkpoint_path, "model.pth")  
         print('this_ckpt_path', this_ckpt_path)
         model, stage_one_epoch, global_iter = load_voxel_model(model,this_ckpt_path, device)
         print("successfully loaded!")
@@ -257,6 +259,7 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
     simplenet_model.eval()
     time_list = []
     time_list2 = []
+    meta_json = []
 
     with torch.no_grad():
         for mode, value in split.items():
@@ -264,19 +267,26 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
             sampler.set_epoch(epoch)
             
             for batch_idx, batch in enumerate(tqdm(loader)):
+                batch_json = {}
                 curr_loss = 0.0
                 
 #                if batch_idx < 1000:
 #                    continue
-#                if batch_idx > 1500:
+#                if batch_idx > 30:
 #                    break
-                print(batch["depth_path"])
+#                print(batch["depth_path"])
                 
                 input_tensor = batch["xyz_img_scale"].float().to(device)
+                xyz_img = batch["xyz_img"].detach().cpu().numpy()
                 joints_3d_gt = batch['joints_3D_Z'].to(device).float()
                 joints_kps_3d_gt = batch["joints_3D_kps"].to(device).float()
                 joints_1d_gt = batch["joints_7"].to(device).float()
                 pose_gt = batch["R2C_Pose"].to(device).float()
+                depth_img_vis = batch["depthvis"].detach().cpu().numpy()
+                depth_path = batch["depth_path"]
+                batch_json["depth_path"] = depth_path[0]
+#                cv2.imwrite(f"/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/depth_c2rp/datasets/imgs_kinect/{batch_idx}.png", depth_img_vis[0])
+#                np.savetxt(f"/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/depth_c2rp/datasets/imgs_kinect/{batch_idx}.txt", xyz_img[0].reshape(-1, 3)) 
                 
                 torch.cuda.synchronize()
                 t1 = time.time()
@@ -290,6 +300,7 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                 
                 
                 loss_dict, data_dict = model(batch, "test", epoch-1)
+                
                 
 
                 if cfg["TRAIN"]["FIRST_EPOCHS"] < epoch:
@@ -306,10 +317,15 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                     
                     loss_dict = loss_dict_refine
                     
-                
+                acc.append(loss_dict["acc"].detach().cpu().numpy())
                 
                 joints_3d_pred = data_dict["pred_pos"].view(b, -1, 3)
                 joints_angle_pred, pose_pred = simplenet_model(joints_3d_pred.clone(), joints_1d_gt[..., None], gt_angle_flag) 
+                
+                torch.cuda.synchronize()
+                t2 = time.time()
+                
+                print("t2 - t1", t2 - t1)
                 
                 if gt_angle_flag:
                     joints_angle_pred = joints_1d_gt[..., None]
@@ -334,10 +350,13 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                 
                 # joints_pred, joints_gt = joints_3d_pred, joints_3d_gt.detach().cpu().numpy() # B x N x 3
                 joints_pred, joints_gt = joints_3d_pred.detach().cpu().numpy(), joints_3d_gt.detach().cpu().numpy() # B x N x 3
-                
+                batch_json["prediction"] = joints_pred[0].tolist()
+                batch_json["gt"] = joints_gt[0].tolist()
                 
                 ass_add_mean = batch_add_from_pose(joints_pred, joints_gt)
                 ass_add = ass_add + ass_add_mean
+                batch_json["add"] = ass_add_mean[0]
+                meta_json.append(batch_json)
                 
                 ass_mAP_mean = batch_mAP_from_pose(joints_pred, joints_gt,thresholds) # 
                 ass_mAP.append(ass_mAP_mean)
@@ -349,6 +368,7 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
             angles_acc = np.concatenate(angles_acc, axis=0)
             ass_mAP = np.concatenate(ass_mAP, axis=0)
             kps_mAP = np.concatenate(kps_mAP, axis=0)
+            acc = np.array(acc)
             #print(angles_acc.shape)
             
             ass_add = distributed_concat(torch.from_numpy(np.array(ass_add)).to(device), len(sampler.dataset))
@@ -356,7 +376,7 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
             angles_acc = distributed_concat(torch.from_numpy(np.array(angles_acc)).to(device), len(sampler.dataset))
             kps_add  = distributed_concat(torch.from_numpy(np.array(kps_add)).to(device), len(sampler.dataset))
             kps_mAP = distributed_concat(torch.from_numpy(np.array(kps_mAP)).to(device), len(sampler.dataset))
-        
+            acc = distributed_concat(torch.from_numpy(np.array(acc)).to(device), len(sampler.dataset))
             
             joints_3d_pred_gather = distributed_concat(torch.cat(joints_3d_pred_lst, dim=0), len(sampler.dataset))
             joints_angle_pred_gather = distributed_concat(torch.cat(joints_angle_pred_lst, dim=0), len(sampler.dataset))
@@ -385,9 +405,18 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
             ass_mAP_dict = dict()
             
             change_intrinsic_flag = dataset_cfg["CHANGE_INTRINSIC"]
-            file_name = os.path.join(results_path, f"Epoch_{epoch}_batch_{batch_idx}_{mode}_repro_{change_intrinsic_flag}_angle_{gt_angle_flag}.txt")
+            real_name = dataset_cfg["REAL_ROOT"].split('/')[-2]
+            file_name = os.path.join(results_path, f"Epoch_{epoch}_{real_name}_repro_{change_intrinsic_flag}_angle_{gt_angle_flag}.txt")
+            path_meta = os.path.join(results_path, f"Epoch_{epoch}_{real_name}_repro_{change_intrinsic_flag}_angle_{gt_angle_flag}.json")
             
-            if dist.get_rank() == 0:                
+            file_write_meta = open(path_meta, 'w')
+            json_save = json.dumps(meta_json, indent=1)
+            file_write_meta.write(json_save)
+            file_write_meta.close()
+            
+            if dist.get_rank() == 0:   
+                print("voxel mean acc", torch.mean(acc))
+                print("voxel median acc", torch.median(acc))             
                 with open(file_name, "w") as f:
                     print_to_screen_and_file(
                     f, "Analysis results for dataset: {}".format(split[mode][2])

@@ -13,6 +13,7 @@ MODEL:
 voxel_network:
   multires      : 8
   multires_views : 4
+  rgb_model_type     : Resnet34_8s
   rgb_in        : 3
   rgb_out       : 128
   pnet_in_rgb_flag : false
@@ -86,7 +87,7 @@ DATASET:
   AUG_TYPE      : 3d  
 
 TRAIN:
-  BATCH_SIZE    : 12             # batch size used to train
+  BATCH_SIZE    : 1             # batch size used to train
   EPOCHS        : 130             # number of epochs to train
   FIRST_EPOCHS  : 70
   SECOND_EPOCHS : 100
