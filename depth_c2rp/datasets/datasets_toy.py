@@ -80,7 +80,7 @@ class Depth_dataset(Dataset):
     def __init__(self, train_dataset_dir: Path, val_dataset_dir : Path, joint_names: list, run: list, init_mode: str = 'train', \
                 three_d_norm : bool = False, three_d_noise_mu1 : float = 0.0, three_d_noise_mu2 : float = 0.0, three_d_noise_mu3 : float = 0.0, \
                 three_d_noise_std1 : float = 0.0, three_d_noise_std2 : float = 0.0, three_d_noise_std3 : float = 0.0, \
-                three_d_random_drop : float = 0.0
+                three_d_random_drop : float = 0.0, kps_14_name: str="42"
                 ):
         """Load Baxter robot synthetic dataset
 
@@ -125,6 +125,10 @@ class Depth_dataset(Dataset):
         self.run = run
         self._mode = init_mode
         self._aug_mode=True
+#        if init_mode == "train":
+#            self._aug_mode=True
+#        else:
+#            self._aug_mode=False
         
         self.three_d_norm = three_d_norm
         self.three_d_noise_mu1 = three_d_noise_mu1
@@ -136,8 +140,9 @@ class Depth_dataset(Dataset):
         self.three_d_noise_std3 = three_d_noise_std3
         
         self.three_d_random_drop = three_d_random_drop
+        self.kps_14_name = kps_14_name
         
-       
+        #print("aug_mode", self._aug_mode)
         
         self.data = self.load_data()
 
@@ -171,8 +176,9 @@ class Depth_dataset(Dataset):
         # root has no noise
         noise[0] = 0
         
+
         joints_3D_Z += noise
-            #print(noise)
+
         
         if self.three_d_random_drop:
             if np.random.random() < self.three_d_random_drop:
@@ -212,51 +218,105 @@ class Depth_dataset(Dataset):
                         "val" : self.val_dataset_dir}
         splits = ["train", "val"]
         data = defaultdict(list)
+#        for split in splits:
+#            iter = 0
+#            dataset_dir = dataset_dict[split]
+#            rgb_files = glob.glob(os.path.join(dataset_dir, "*", "*_color.png"))
+#            rgb_files.sort()
+#            for rgb_file in tqdm(rgb_files, f"Loading {split} ..."):
+#                 # rgb_file like this : '/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201/10443/0029_color.png'
+#                scene_id, frame_name = rgb_file.split('/')[-2], rgb_file.split('/')[-1]
+#                img_name = f"{scene_id}_{frame_name}"
+#                
+#                # Here the dataset requires depth 8 and depth 16, so how to do that?
+#                depth_file = rgb_file.replace('color.png', 'simDepthImage.exr')
+#                joints_file = rgb_file.replace('color.png', 'meta.json')
+#                with open(joints_file, 'r') as fd:
+#                    json_data = json.load(fd)[0]
+#                json_keypoints_data = json_data["keypoints"]
+#                json_joints_data = json_data["joints_3n_fixed_42"]
+#                json_joints_7_data = json_data["joints"]
+#                joints_7_pos = [kp["position"] for idx, kp in enumerate(json_joints_7_data) if idx != len(json_joints_7_data)-1] 
+#                
+#                keypoints_r2c_data = [json_keypoints_data[idx]["R2C_mat"] for idx in range(len(json_keypoints_data))]
+#                joints_loc_wrt_cam_data = [json_joints_data[idx]["location_wrt_cam"] for idx in range(len(json_joints_data))]
+#                assert len(self.JOINT_NAMES) == len(joints_loc_wrt_cam_data)
+#
+#                
+#                joints_pos = np.zeros((len(self.JOINT_NAMES), 3), dtype=np.float32)
+#                for idx, k in enumerate(self.JOINT_NAMES):
+#                    loc_wrt_cam = joints_loc_wrt_cam_data[idx]
+#                    joints_pos[idx] = [loc_wrt_cam[0], 
+#                                       loc_wrt_cam[1],
+#                                       loc_wrt_cam[2],] 
+#
+#
+#                iter += 1
+#
+#                sample = {
+#                        'rgb_file': rgb_file,
+#                        "depth_file" : depth_file, # mm
+#                        'joints': joints_pos, 
+#                        "joints_7" : joints_7_pos            # [tx, ty, tz, qw, qx, qy, qz]
+#                    }
+#
+#                data[split].append(sample)
+                    
         for split in splits:
-            iter = 0
-            dataset_dir = dataset_dict[split]
-            rgb_files = glob.glob(os.path.join(dataset_dir, "*", "*_color.png"))
-            rgb_files.sort()
-            for rgb_file in tqdm(rgb_files, f"Loading {split} ..."):
-                 # rgb_file like this : '/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201/10443/0029_color.png'
-                scene_id, frame_name = rgb_file.split('/')[-2], rgb_file.split('/')[-1]
-                img_name = f"{scene_id}_{frame_name}"
+            if split == "train" or split == "val":
+                iter = 0
+                dataset_dir = dataset_dict[split]
+                meta_files = glob.glob(os.path.join(dataset_dir, "*.pkl"))
+                if len(meta_files) == 0:
+                    meta_files = glob.glob(os.path.join(dataset_dir, "*", "*meta.json"))
+                meta_files.sort()
                 
-                # Here the dataset requires depth 8 and depth 16, so how to do that?
-                depth_file = rgb_file.replace('color.png', 'simDepthImage.exr')
-                joints_file = rgb_file.replace('color.png', 'meta.json')
-                with open(joints_file, 'r') as fd:
-                    json_data = json.load(fd)[0]
-                json_keypoints_data = json_data["keypoints"]
-                json_joints_data = json_data["joints_3n_fixed_42"]
-                json_joints_7_data = json_data["joints"]
-                joints_7_pos = [kp["position"] for idx, kp in enumerate(json_joints_7_data) if idx != len(json_joints_7_data)-1] 
-                
-                keypoints_r2c_data = [json_keypoints_data[idx]["R2C_mat"] for idx in range(len(json_keypoints_data))]
-                joints_loc_wrt_cam_data = [json_joints_data[idx]["location_wrt_cam"] for idx in range(len(json_joints_data))]
-                assert len(self.JOINT_NAMES) == len(joints_loc_wrt_cam_data)
-
-                
-                joints_pos = np.zeros((len(self.JOINT_NAMES), 3), dtype=np.float32)
-                for idx, k in enumerate(self.JOINT_NAMES):
-                    loc_wrt_cam = joints_loc_wrt_cam_data[idx]
-                    joints_pos[idx] = [loc_wrt_cam[0], 
-                                       loc_wrt_cam[1],
-                                       loc_wrt_cam[2],] 
-
-
-                iter += 1
-
-                sample = {
-                        'rgb_file': rgb_file,
-                        "depth_file" : depth_file, # mm
-                        'joints': joints_pos, 
-                        "joints_7" : joints_7_pos            # [tx, ty, tz, qw, qx, qy, qz]
-                    }
-
-                data[split].append(sample)
+                for meta_file in tqdm(meta_files, f"Loading {split} ..."):
+                    rgb_file, depth_pf_file, depth_file = 0.0, 0.0, 0.0
                     
                     
+                    # rgb_file, depth_pf_file, depth_file
+                    try:
+                        img_name = meta_file.replace(".pkl", "")
+                        with open(meta_file , "rb") as fh:
+                            json_data = pickle.load(fh)[0]
+                    except: 
+                        with open(meta_file, 'r') as fd:
+                            json_data = json.load(fd)[0]
+                    
+                    # link kps info
+                    json_keypoints_data = json_data["keypoints"]
+                    json_keypoints_pos = [kp["location_wrt_cam"] for idx, kp in enumerate(json_keypoints_data)]
+                    R2C_Mat = json_keypoints_data[0]["R2C_mat"]
+                    R2C_Trans = json_keypoints_data[0]["location_wrt_cam"]
+                    
+                    # 14 kps info                
+                    json_joints_data = json_data[f"joints_3n_fixed_{self.kps_14_name}"]
+                    joints_loc_wrt_cam_data = [json_joints_data[idx]["location_wrt_cam"] for idx in range(len(json_joints_data))]
+                    assert len(self.JOINT_NAMES) == len(joints_loc_wrt_cam_data)
+                    
+                    # joints info
+                    json_joints_8_data = json_data["joints"]
+                    joints_8_pos = [kp["position"] for idx, kp in enumerate(json_joints_8_data)] 
+                    
+                    joints_pos = np.zeros((len(self.JOINT_NAMES), 3), dtype=np.float32)
+                    for idx, k in enumerate(self.JOINT_NAMES):
+                        loc_wrt_cam = joints_loc_wrt_cam_data[idx]
+                        joints_pos[idx] = [loc_wrt_cam[0], 
+                                           loc_wrt_cam[1],
+                                           loc_wrt_cam[2],] 
+                    iter += 1
+                    sample = {
+                            'rgb_file': rgb_file,
+                            "depth_file" : depth_file, # mm
+                            "depth_pf_file" : depth_pf_file,
+                            'joints': joints_pos,             # [tx, ty, tz, qw, qx, qy, qz]
+                            "joints_7" : joints_8_pos[:7], 
+                            "joints_kps" : json_keypoints_pos,
+                            "R2C_Mat" :  R2C_Mat,
+                            "R2C_Trans" : R2C_Trans
+                        }
+                    data[split].append(sample)                    
 
         return data
 

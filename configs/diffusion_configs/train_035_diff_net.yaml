@@ -1,0 +1,152 @@
+DEVICE          : cuda              # device used for training and evaluation (cpu, cuda, cuda0, cuda1, ...)
+SAVE_DIR        : "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/DIFF"        # output folder name used for saving the model, logs and inference results
+
+DATASET:
+  NAME          : HELEN                                               # dataset name to be trained with (camvid, cityscapes, ade20k)
+  TRAINING_ROOT : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0715_2d3d/"     
+  VAL_ROOT      : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0731_2d3d_Valid/"   # dataset root path
+  REAL_ROOT     : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Real_Test_0613/1_D415_front_0/"
+  TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0731_2d3d_Valid/"             
+  #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Small_Testing_Data_0115/"  
+  #TESTING_ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Test_Data_0115/"  
+  #TESTING ROOT  : "/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201_test_syn/"             
+  MANIPULATOR   : Franka_Emika_Panda
+  KEYPOINT_NAMES : ["Link0", "Link1", "Link2", "Link3", "Link4", "Link5", "Link6", "Link7", "panda_hand", "panda_finger_joint1", "panda_finger_joint2"]
+  JOINT_NAMES   : ["panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4", "panda_joint5", "panda_joint6", "panda_joint7", "panda_finger_joint1"]
+  JOINT_INFOS   : {"panda_joint1" : {"index" : 2, "direction" : 1, "base" : 0, "offset" : [0.0, 0.0, 0.14]}, "panda_joint2" : {"index" : 1, "direction" : 1, "base" : 1, "offset" : [0.0, 0.0, 0.0]}, "panda_joint3" : {"index" : 1, "direction" : -1, "base" : 3, "offset" : [0.0, 0.0, -0.1210]}, "panda_joint4" : {"index" : 1, "direction" : -1, "base" : 4, "offset" : [0.0, 0.0, 0.0]}, "panda_joint5" : {"index" : 1, "direction" : 1, "base" : 5, "offset" : [0.0, 0.0, -0.2590]}, "panda_joint6" : {"index" : 1, "direction" : -1, "base" :5, "offset" : [0.0, 0.0158, 0.0]}, "panda_joint7" : {"index" : 1, "direction" : -1, "base" : 7, "offset" : [0.0, 0.0, 0.0520]}, "panda_finger_joint1" : {"base" : 8, "offset" : [0.0, 0.0, 0.0584]}}
+  MASK_DICT     : { "Link0": 0.0039215688, "Link1": 0.0078431377, "Link2": 0.0117647061, "Link3": 0.0156862754, "Link4": 0.0196078438, "Link5": 0.0235294122, "Link6": 0.0274509806, "Link7": 0.0313725508, "panda_hand" : 0.0352941192,"panda_finger_joint1" : 0.0392156876,"panda_finger_joint2" : 0.0431372560}
+  TYPE          : D
+  NUM_JOINTS    : 14
+  INPUT_RESOLUTION : [384, 216] # W x H
+  RAW_RESOLUTION : [640, 360] # W x H 
+  NORM_TYPE     : min_max
+  REF_FRAME     : left_hand
+  DEPTH_RANGE   : [500, 3380, 7.5]
+  DEPTH_RANGE_TYPE : padding
+  SURROUNDING_REMOVALS : false
+  SIGMA         : 3.0
+  AUG           : true
+  AUG_TYPE      : 3d  
+
+DIFF_MODEL:                                                                          
+  SEED          : 317                                # name of the model you are using
+  NUM_JOINTS    : 1
+  COND_NUM_JOINTS : 14
+  TASK          : 3d_RPE
+  INPUT_TYPE    : diff
+  OUTPUT_TYPE   : 2.5dH
+  SIGMA_MIN     : 0.01
+  SIGMA_MAX     : 50
+  NUM_SCALES    : 1000
+  BETA_MIN      : 0.1
+  BETA_MAX      : 20.
+  DROPOUT       : 0.1
+  NAME          : ncsnpp
+  FOURIER_SCALE : 16
+  SCALE_BY_SIGMA : false
+  EMA_RATE      : 0.9999
+  NORMALIZATION : GroupNorm
+  NONLINEARITY  : swish
+  NF            : 128
+  CH_MULT       : (1, 2, 2, 2)
+  NUM_RES_BLOCKS : 8
+  ATTN_RESOLUTIONS : (16, )
+  RESAMP_WITH_CONV : true
+  CONDITIONAL   : true
+  FIR           : true
+  FIR_KERNEL    : [1, 3, 3, 1]
+  SKIP_RESCALE  : true
+  RESBLOCK_TYPE : biggan
+  PROGRESSIVE   : none
+  PROGRESSIVE_INPUT : residual
+  PROGRESSIVE_COMBINE : sum
+  ATTENTION_TYPE : ddpm
+  EMBEDDING_TYPE : positional
+  INIT_SCALE     : 0.0
+  CONV_SIZE      : 3.0
+  JOINT_DIM      : 16
+  HIDDEN_DIM     : 1024
+  EMBED_DIM      : 512
+  CONDITION_DIM  : 2
+  EVAL_FREQ      : 10
+  
+DIFF_TRAINING:
+  FULL          : false
+  BATCH_SIZE    : 4096              # batch size used to train
+  EPOCHS        : 20000             # number of epochs to train
+  GT_ANGLE_FLAG : false
+  EVAL_INTERVAL : 10              # evaluation interval during training
+  AMP           : false           # use AMP in training
+  DDP           : false           # use DDP training
+  NUM_WORKERS   : 32
+  N_ITERS       : 950001
+  SNAPSHOT_FREQ : 50000
+  LOG_FREQ      : 50
+  SNAPSHOT_FREQ_FOR_PREEMPTION : 10000
+  LIKELIHOOD_WEIGHTING : false
+  SNAPSHOT_SAMPLING : true
+  CONTINUOUS : true
+  REDUCE_MEAN : true
+  DATA_SCALE : 30
+  COND_POSE_MASK_PROB : 0.0
+  COND_PART_MASK_PROB : 0.0
+  COND_JOINT_MASK_PROB : 0.0 # function ???
+  COND_3D_PROB : 0.1
+  COND_UV_STD  : 1.5
+  LARGE_COND_UV_STD : 0.0
+  PROB_LARGE_COND_UV : 0.0
+  COND_NORM : true
+  SDE : vpsde
+  EPS : 0.001  
+
+DIFF_SAMPLING:
+  N_STEPS_EACH : 1
+  NOISE_REMOVAL : true
+  PROBABILITY_FLOW : false
+  SNR : 0.6
+  METHOD : ddim_solver
+  PREDICTOR : euler_maruyama
+  CORRECTOR : none
+  SAMPLING_EPS : 0.001
+
+DIFF_EVAL:
+  BEGIN_CKPT : 9
+  END_CKPT : 26
+  BATCH_SIZE : 3000
+  ENABLE_SAMPLING : false
+  NUM_SAMPLES : 10
+  ENABLE_LOSS : true
+  ENABLE_BPD  : false
+  BPD_DATASET : test 
+
+DIFF_OPTIM:
+  WEIGHT_DECAY  : 0.0
+  OPTIMIZER     : Adam
+  LR            : 0.0002
+  BETA1         : 0.9
+  EPS           : 0.00000001
+  WARMUP        : 5000
+  GRAD_CLIP     : 1.
+
+DR:
+  ENGINE          : Kaolin
+  CAD_MODEL_PATHS : [../materials/franka_panda/Link0.obj, ../materials/franka_panda/Link1.obj, ../materials/franka_panda/Link2.obj,
+                     ../materials/franka_panda/Link3.obj, ../materials/franka_panda/Link4.obj, ../materials/franka_panda/Link5.obj,
+                     ../materials/franka_panda/Link6.obj, ../materials/franka_panda/Link7.obj, ../materials/franka_panda/panda_hand.obj,
+                     ../materials/franka_panda/panda_finger_joint1.obj, ../materials/franka_panda/panda_finger_joint2.obj
+                    ] 
+  RT_LR           : 0.01
+  GA_LR           : 0.01
+  NUM_OF_SAMPLE_PTS : 3000
+
+LOSS:
+  hm_coeff        : 1.0
+  woff_coeff      : 0.01
+  pos_coeff       : 100.0
+  prob_coeff      : 0.5
+  
+
+
+
+
+

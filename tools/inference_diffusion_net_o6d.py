@@ -37,14 +37,14 @@ from depth_c2rp.utils.analysis import flat_add_from_pose, add_metrics, add_from_
 
 from depth_c2rp.models.backbones.dream_hourglass import ResnetSimple, SpatialSoftArgmax
 #from depth_c2rp.datasets.datasets_voxel_ours import Voxel_dataset
-from depth_c2rp.datasets.datasets_diffusion_ours import Diff_dataset
+from depth_c2rp.datasets.datasets_diffusion_inference import Diff_dataset
 #from depth_c2rp.voxel_utils.voxel_network import build_voxel_simple_network, load_simplenet_model
 
 # diffusion
 from depth_c2rp.diffusion_utils.diffusion_network import build_diffusion_network, build_simple_network, load_simplenet_model
 from depth_c2rp.diffusion_utils.diffusion_losses import get_optimizer, optimization_manager
 from depth_c2rp.diffusion_utils.diffusion_ema import ExponentialMovingAverage
-from depth_c2rp.diffusion_utils.diffusion_utils import diff_save_weights, diff_load_weights
+from depth_c2rp.diffusion_utils.diffusion_utils import diff_save_weights, diff_load_weights, average_quaternion_batch
 from depth_c2rp.diffusion_utils.diffusion_sampling import get_sampling_fn
 
 def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5, 30.0, 2.5]):
@@ -91,9 +91,10 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                                      depth_range_type=dataset_cfg["DEPTH_RANGE_TYPE"],
                                      aug_type=dataset_cfg["AUG_TYPE"],
                                      aug_mode=False,
-                                     change_intrinsic=dataset_cfg["CHANGE_INTRINSIC"],
+                                     change_intrinsic=cfg["CHANGE_INTRINSIC"],
                                      uv_input=False,
                                      cond_uv_std=train_cfg["COND_UV_STD"],
+                                     cond_norm=train_cfg["COND_NORM"],
                                      )
                                     
     training_dataset.train()
@@ -181,7 +182,11 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
     
     if cfg["RESUME"]:
         print("Resume Model Checkpoint")
-        model_ckpt_path = os.path.join(checkpoint_path, "model.pth")    
+        resume_checkpoint = cfg["RESUME_CHECKPOINT"]
+        if resume_checkpoint:
+            model_ckpt_path = os.path.join(checkpoint_path, resume_checkpoint)
+        else:
+            model_ckpt_path = os.path.join(checkpoint_path, "model.pth")   
         print('this_ckpt_path', model_ckpt_path)
         checkpoint = diff_load_weights(model_ckpt_path, device)
         state_dict = {}
@@ -191,6 +196,8 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                 state_dict[k[7:]] = checkpoint["model_state_dict"][k]
             if k[17:] in model.state_dict():
                 state_dict[k[17:]] = checkpoint["model_state_dict"][k]
+            if k in model.state_dict():
+                state_dict[k] = checkpoint["model_state_dict"][k]
         ret = model.load_state_dict(state_dict, strict=True)
 
     start_epoch,global_iter = 0, 0
@@ -240,6 +247,9 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
     loss_cfg = cfg["LOSS"]
     num_samples = cfg["DIFF_EVAL"]["NUM_SAMPLES"]
     joint_dim = int(cfg["DIFF_MODEL"]["JOINT_DIM"])
+    pred_2d_flag = cfg["PRED_2D_FLAG"]
+    method = cfg["DIFF_SAMPLING"]["METHOD"]
+    cond_norm_flag = train_cfg["COND_NORM"]
 
     print("len_dataloader", len(training_loader))
     
@@ -254,7 +264,7 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
     simplenet_model.eval()
     time_list = []
     time_list2 = []
-    meta_json = []
+    meta_json = {}
     uv_pred_list = []
 
     with torch.no_grad():
@@ -266,31 +276,37 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                 batch_json = {}
                 curr_loss = 0.0
                 
-                #input_tensor = batch["xyz_img_scale"].float().to(device)
-                #xyz_img = batch["xyz_img"].detach().cpu().numpy()
                 joints_3d_gt = batch['joints_3D_Z'].to(device, non_blocking=True).float()
                 joints_kps_3d_gt = batch["joints_3D_kps"].to(device, non_blocking=True).float()
                 joints_1d_gt = batch["joints_7"].to(device).float()
                 pose_gt = batch["R2C_Pose"].to(device).float()
-                #depth_img_vis = batch["depthvis"].detach().cpu().numpy()
-                #depth_path = batch["depth_path"]
-                #batch_json["depth_path"] = depth_path[0]
+                intrinsic = batch["intrinsic"].to(device).float()
+                fx, fy = intrinsic[0, 0, 0], intrinsic[0, 1, 1]
+                cx, cy = intrinsic[0, 0, 2], intrinsic[0, 1, 2]
+
 
                 
                 
-#                torch.cuda.synchronize()
-#                t1 = time.time()
-#                input_tensor = batch["xyz_img_scale"].float().to(device)
-#                _, _, h, w = input_tensor.shape
-#                heatmap_pred = heatmap_model(input_tensor)[-1]
-#                heatmap_pred = (F.interpolate(heatmap_pred, (h, w), mode='bicubic', align_corners=False) + 1) / 2.
-#                _, c, _, _ = heatmap_pred.shape
-#                
-#                uv_pred = softargmax_uv(heatmap_pred[:, :c//2, :, :])   
-#                
-#                uv_pred_list += (((uv_pred / w - batch["joints_2D_uv"].cuda().float()) * w).abs().detach().cpu().numpy().reshape(uv_pred.shape[0], -1).tolist())
-#     
-#                batch["joints_2D_uv"] = uv_pred / w
+                torch.cuda.synchronize()
+                t1 = time.time()
+                
+                if pred_2d_flag:
+                    input_tensor = batch["xyz_img_scale"].float().to(device)
+                    _, _, h, w = input_tensor.shape
+                    heatmap_pred = heatmap_model(input_tensor)[-1]
+                    heatmap_pred = (F.interpolate(heatmap_pred, (h, w), mode='bicubic', align_corners=False) + 1) / 2.
+                    _, c, _, _ = heatmap_pred.shape
+                    
+                    uv_pred = softargmax_uv(heatmap_pred[:, :c//2, :, :])   
+    #                
+                    uv_pred_list += (((uv_pred / w - batch["joints_2D_uv"].cuda().float()) * w).abs().detach().cpu().numpy().reshape(uv_pred.shape[0], -1).tolist())
+#                   
+                    
+                    if cond_norm_flag:
+                        batch["joints_2D_uv"][:, :, 0] = (uv_pred[:, :, 0] - cx) / fx
+                        batch["joints_2D_uv"][:, :, 1] = (uv_pred[:, :, 1] - cy) / fy
+                    else:
+                        batch["joints_2D_uv"] = uv_pred / w
                 
                 
                 joints_2d = batch["joints_2D_uv"].float().to(device, non_blocking=True)
@@ -314,19 +330,25 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                 # # results: [b, j, 16], i.e., the end pose of each traj
                 results = torch.from_numpy(results).float().to(device) # (bs x num_samples, j, 16)
                 results = results.reshape(num_samples, bs, -1, joint_dim) 
-                results = results.permute(1, 0, 2, 3) # bs x num_samples x j x 16
-                results = torch.mean(results, dim=1) # bs x j x 16
+                results_repeat = results.permute(1, 0, 2, 3) # bs x num_samples x j x 16
+                results = torch.mean(results_repeat, dim=1) # bs x j x 16
+                
+                print("results.shape", results.shape)
                 
                 assert results.shape[1] == 1
                 assert results.shape[0] == bs
                 assert results.shape[2] == joint_dim
                 results = results.squeeze(1)
                 
-                
-                R2C_o6d_pred = results[:, :6] # bs x 6
                 R2C_Trans_pred = results[:, 6:9][..., None] # bs x 3 x 1
                 joints_angle_pred = results[:, 9:][..., None] # bs x 7 x 1
-                R2C_Rot_pred = transforms.rotation_6d_to_matrix(R2C_o6d_pred) # bs x 3 x 3
+                
+                R2C_o6d_pred_repeat = results_repeat[:, :, 0, :6] # bs x num_samples x 6
+                R2C_Rot_pred_repeat = transforms.rotation_6d_to_matrix(R2C_o6d_pred_repeat) # bs x num_samples x 3 x 3
+                R2C_quat_pred_repeat = transforms.matrix_to_quaternion(R2C_Rot_pred_repeat) # bs x num_samples x 4 w, x, y, z
+                R2C_quat_pred = average_quaternion_batch(R2C_quat_pred_repeat) # bs x 4
+                R2C_Rot_pred = transforms.quaternion_to_matrix(R2C_quat_pred)
+                
                             
                 if gt_angle_flag:
                     joints_angle_pred = joints_1d_gt[..., None]
@@ -344,8 +366,9 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
             angles_acc = np.concatenate(angles_acc, axis=0)
             kps_mAP = np.concatenate(kps_mAP, axis=0)
             
-            print(uv_pred_list)
-#            uv_pred_list = distributed_concat(torch.from_numpy(np.array(uv_pred_list)).to(device), len(sampler.dataset))
+            if pred_2d_flag:
+                uv_pred_list = distributed_concat(torch.from_numpy(np.array(uv_pred_list)).to(device), len(sampler.dataset))
+                print("uv_pred_list.shape", uv_pred_list.shape)
             angles_acc = distributed_concat(torch.from_numpy(np.array(angles_acc)).to(device), len(sampler.dataset))
             kps_add  = distributed_concat(torch.from_numpy(np.array(kps_add)).to(device), len(sampler.dataset))
             kps_mAP = distributed_concat(torch.from_numpy(np.array(kps_mAP)).to(device), len(sampler.dataset))
@@ -364,7 +387,8 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
             angles_acc = angles_acc.detach().cpu().numpy().tolist()
             kps_add = kps_add.detach().cpu().numpy().tolist()
             kps_mAP = kps_mAP.detach().cpu().numpy().tolist()
-#            uv_pred_list = uv_pred_list.detach().cpu().numpy().reshape(-1)
+            if pred_2d_flag:
+                uv_pred_list = uv_pred_list.detach().cpu().numpy().reshape(-1)
             
             
             
@@ -375,15 +399,18 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
             kps_mAP_dict = dict()
 
             
-            change_intrinsic_flag = dataset_cfg["CHANGE_INTRINSIC"]
+            change_intrinsic_flag = cfg["CHANGE_INTRINSIC"]
             real_name = dataset_cfg["REAL_ROOT"].split('/')[-2]
-            file_name = os.path.join(results_path, f"Epoch_{start_epoch}_{real_name}_repro_{change_intrinsic_flag}_angle_{gt_angle_flag}.txt")
-#            path_meta = os.path.join(results_path, f"Epoch_{start_epoch}_{real_name}_repro_{change_intrinsic_flag}_angle_{gt_angle_flag}.json")
+            file_name = os.path.join(results_path, f"Epoch_{str(start_epoch).zfill(5)}_{real_name}_change_intrin_{change_intrinsic_flag}_angle_{gt_angle_flag}_ns_{num_samples}_pred2d_{pred_2d_flag}_{method}.txt")
+            path_meta = os.path.join(info_path, f"Epoch_{str(start_epoch).zfill(5)}_{real_name}_change_intrin_{change_intrinsic_flag}_angle_{gt_angle_flag}_ns_{num_samples}_pred2d_{pred_2d_flag}_{method}.json")
             
-#            file_write_meta = open(path_meta, 'w')
-#            json_save = json.dumps(meta_json, indent=1)
-#            file_write_meta.write(json_save)
-#            file_write_meta.close()
+            file_write_meta = open(path_meta, 'w')
+            #print("joints_3d_pred_gather", joints_3d_pred_repeat_gather.shape)
+            if pred_2d_flag:
+                meta_json["uv_pred_list"] = uv_pred_list.tolist()
+            json_save = json.dumps(meta_json, indent=1)
+            file_write_meta.write(json_save)
+            file_write_meta.close()
             
             if dist.get_rank() == 0:    
 #                print("percentage", np.percentile(uv_pred_list, [i * 10 for i in range(1, 10)]))            

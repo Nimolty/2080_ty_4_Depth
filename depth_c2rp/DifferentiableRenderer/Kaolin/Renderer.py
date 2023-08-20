@@ -12,10 +12,12 @@ import numpy as np
 import time
 import random
 from PIL import Image as PILImage
-
+import json
+import pickle5 as pickle
+import glob
 from depth_c2rp.DifferentiableRenderer.Kaolin.Render_utils import projectiveprojection_real, euler_angles_to_matrix, load_part_mesh, concat_part_mesh, exists_or_mkdir
 from depth_c2rp.DifferentiableRenderer.Kaolin.Render_utils import quaternion_to_matrix, matrix_to_quaternion, euler_angles_to_matrix, matrix_to_euler_angles, seg_and_transform, compute_rotation_matrix_from_ortho6d
-from depth_c2rp.DifferentiableRenderer.Kaolin.Render_utils import depthmap2pointcloud
+from depth_c2rp.DifferentiableRenderer.Kaolin.Render_utils import depthmap2pointcloud, overlay_points_on_image, mosaic_images
 
 from tqdm import tqdm
 import argparse
@@ -334,61 +336,181 @@ if __name__ == "__main__":
    DF = DiffPFDepthRenderer(cfg, device)
    DF.load_mesh()
    K = torch.tensor([
-                   [502.30, 0.0, 319.5],
-                   [0.0, 502.30, 179.5],
+                   [502.30, 0.0, 319.75],
+                   [0.0, 502.30, 179.75],
                    [0.0, 0.0, 1.0]
                    ], device=device)
+   camera_K = K.detach().cpu().numpy()
    height = 360
    width = 640
    DF.set_camera_intrinsics(K, width=width, height=height)
    
-   quaternion = torch.tensor([ 0.6257,  0.7686,  0.0969, -0.0913],device=device).reshape(1, 4)
-   translation = torch.tensor([-0.37863880349038576, 0.2666280120354375, 1.5995485870204855], device=device).reshape(1, 3)
-   joints_angle = torch.tensor([-0.6526082062025893, 
-                                             0.9279837857801965, 
-                                             2.551399836921973, 
-                                             -2.33985123801545, \
-                                             1.4105617980583107, 
-                                             2.125588105143108, 
-                                             1.2248684962301084, 
-                                            ], device=device).reshape(1, 7, 1)
-   joints_angle.requires_grad = True
-   quaternion.requires_grad = True
-   translation.requires_grad = True
+   pkl_path = f"/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0715_2d3d/"
+   pkl_path_list = glob.glob(os.path.join(pkl_path, "*pkl"))
+   pkl_path_list.sort()
+   
+   for b, pkl_path in enumerate(pkl_path_list):
+       with open(pkl_path , "rb") as fh:
+           json_data = pickle.load(fh)[0]
+       json_keypoints_data = json_data["keypoints"]                    
+       json_joints_data = json_data["joints_3n_fixed_42"]
+       json_joints_8_data = json_data["joints"] 
+       
+       this_joint_angles = [kp["position"] for idx, kp in enumerate(json_joints_8_data)]
+       this_joint_angles = torch.from_numpy(np.array(this_joint_angles)).float().to(device).reshape(1, 7, 1)
+       this_rot = torch.from_numpy(np.array(json_keypoints_data[0]["R2C_mat"])).float().to(device).reshape(1, 3, 3)
+       this_quaternion = matrix_to_quaternion(this_rot) # 1 x 4
+       this_translation = torch.from_numpy(np.array(json_keypoints_data[0]["location_wrt_cam"])).float().to(device).reshape(1, 3) # 1 x 3
+       kps_7_list = (np.array([kp["location_wrt_cam"] for idx, kp in enumerate(json_keypoints_data)])[[0,2,3,4,6,7,8]])
+       kps_14_list = np.array([json_joints_data[idx]["location_wrt_cam"] for idx in range(len(json_joints_data))])
+       
+       
+       kps_7_list = (camera_K @ kps_7_list.T).T # (N, 3)
+       kps_7_list = (kps_7_list / kps_7_list[:, -1:])[:, :2]
+       kps_14_list = (camera_K @ kps_14_list.T).T # (N, 3)
+       kps_14_list = (kps_14_list / kps_14_list[:, -1:])[:, :2]
+       
+       this_quaternion.requires_grad = True
+       this_translation.requires_grad = True
+#       this_joint_angles.requires_grad = True
+       
+       DF.set_all_optimizer(this_joint_angles, this_quaternion, this_translation)
+       DF.batch_mesh(1)
+   
+       DF.concat_mesh()
+       img = DF.Rasterize()[0].detach().cpu().numpy() * (-255)
+       
+       image_path = f"./data_imgs/render_depth_{str(b).zfill(4)}.png"
+       cv2.imwrite(image_path, img)
+       images = []
+       for n in range(len(kps_7_list)):
+           image = overlay_points_on_image(image_path, [kps_7_list[n]], annotation_color_dot = ["yellow"], point_diameter=4)
+           images.append(image)
+       
+       img = mosaic_images(
+                   images, rows=2, cols=4, inner_padding_px=10
+               )
+       save_path = image_path.replace("render", "7_kps_render.png")
+       img.save(save_path)
+       
+       images = []
+       for n in range(len(kps_14_list)):
+           image = overlay_points_on_image(image_path, [kps_14_list[n]], annotation_color_dot = ["blue"], point_diameter=4)
+           images.append(image)
+       
+       img = mosaic_images(
+                   images, rows=4, cols=4, inner_padding_px=10
+               )
+       save_path = image_path.replace("render", "14_kps_render.png")
+       img.save(save_path)       
+   
+   
+   
+#   json_path = f"/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/depth_c2rp/info.json"
+#   json_in = open(json_path, 'r')
+#   json_data = json.load(json_in)
+#   poses_list = json_data["pose"]
+#   joint_angles_list = json_data["joints"]
+#   kps_7_list = json_data["kps_7"]
+#   kps_14_list = json_data["kps_14"]
+#   
+#   for b in range(len(poses_list)):
+#       this_pose = poses_list[b]
+#       this_joint_angles = joint_angles_list[b]
+#       if b == 1:
+#           print(kps_7_list[b])
+#       
+#       this_pose = torch.from_numpy(np.array(this_pose)).float().to(device).reshape(1, 4, 4)
+#       this_joint_angles = torch.from_numpy(np.array(this_joint_angles)).float().to(device).reshape(1, 7, 1)
+       
+       
+
+       
+#       this_quaternion = matrix_to_quaternion(this_pose[:, :3, :3]) # 1 x 4
+#       this_translation = this_pose[:, :3, 3] # 1 x 3
+       
+#       this_quaternion.requires_grad = True
+#       this_translation.requires_grad = True
+##       this_joint_angles.requires_grad = True
+#       
+#       DF.set_all_optimizer(this_joint_angles, this_quaternion, this_translation)
+#       DF.batch_mesh(1)
+#   
+#       DF.concat_mesh()
+#       img = DF.Rasterize()[0].detach().cpu().numpy() * (-255)
+#       
+#       image_path = f"./data_imgs/render_depth_{str(b).zfill(4)}.png"
+#       cv2.imwrite(image_path, img)
+#       images = []
+#       for n in range(len(kps_7_list[b])):
+#           image = overlay_points_on_image(image_path, [kps_7_list[b][n]], annotation_color_dot = ["yellow"], point_diameter=4)
+#           images.append(image)
+#       
+#       img = mosaic_images(
+#                   images, rows=2, cols=4, inner_padding_px=10
+#               )
+#       save_path = image_path.replace("render", "7_kps_render.png")
+#       img.save(save_path)
+#       
+#       images = []
+#       for n in range(len(kps_14_list[b])):
+#           image = overlay_points_on_image(image_path, [kps_14_list[b][n]], annotation_color_dot = ["blue"], point_diameter=4)
+#           images.append(image)
+#       
+#       img = mosaic_images(
+#                   images, rows=4, cols=4, inner_padding_px=10
+#               )
+#       save_path = image_path.replace("render", "14_kps_render.png")
+#       img.save(save_path)
+       
+   
+#   quaternion = torch.tensor([ 0.6257,  0.7686,  0.0969, -0.0913],device=device).reshape(1, 4)
+#   translation = torch.tensor([-0.37863880349038576, 0.2666280120354375, 1.5995485870204855], device=device).reshape(1, 3)
+#   joints_angle = torch.tensor([-0.6526082062025893, 
+#                                             0.9279837857801965, 
+#                                             2.551399836921973, 
+#                                             -2.33985123801545, \
+#                                             1.4105617980583107, 
+#                                             2.125588105143108, 
+#                                             1.2248684962301084, 
+#                                            ], device=device).reshape(1, 7, 1)
+#   joints_angle.requires_grad = True
+#   quaternion.requires_grad = True
+#   translation.requires_grad = True
    
 
 
-   DF.set_optimizer(quaternion, translation, joints_angle)
-   DF.batch_mesh(1)
-   
-   DF.concat_mesh()
-   img = DF.Rasterize()
-   print(img.shape)
-   print(torch.max(img))
-   print(torch.min(img))
-   
-   cv2.imwrite(f"./render_depth.png", img[0].detach().cpu().numpy() * (-255))
-   
-   pcs = img[0].detach().cpu().numpy().reshape(-1, 3)
-   #pcs[:, 1] *= -1
-   pcs[:, 2] *= -1
-   np.savetxt(f"./render_pcs.txt", pcs)
-   
-   gt_depth = f"./0000_depth_60.exr"
-   gt_img = cv2.imread(gt_depth, cv2.IMREAD_UNCHANGED)[:, :, 0].astype(np.float32) 
-   K = K.detach().cpu().numpy()
-   gt_pcs = depthmap2pointcloud(gt_img, K[0][0], K[1][1], K[0][2], K[1][2])
-   np.savetxt(f"./gt_pcs.txt", gt_pcs)
+#   DF.set_optimizer(quaternion, translation, joints_angle)
+#   DF.batch_mesh(1)
+#   
+#   DF.concat_mesh()
+#   img = DF.Rasterize()
+#   print(img.shape)
+#   print(torch.max(img))
+#   print(torch.min(img))
+#   
+#   cv2.imwrite(f"./render_depth.png", img[0].detach().cpu().numpy() * (-255))
+#   
+#   pcs = img[0].detach().cpu().numpy().reshape(-1, 3)
+#   #pcs[:, 1] *= -1
+#   pcs[:, 2] *= -1
+#   np.savetxt(f"./render_pcs.txt", pcs)
+#   
+#   gt_depth = f"./0000_depth_60.exr"
+#   gt_img = cv2.imread(gt_depth, cv2.IMREAD_UNCHANGED)[:, :, 0].astype(np.float32) 
+#   K = K.detach().cpu().numpy()
+#   gt_pcs = depthmap2pointcloud(gt_img, K[0][0], K[1][1], K[0][2], K[1][2])
+#   np.savetxt(f"./gt_pcs.txt", gt_pcs)
    
    
 #   gt_rgb_image = cv2.imread(img_path[b])
 #            gt_rgb_image = cv2.cvtColor(gt_rgb_image, cv2.COLOR_RGB2BGR)
 #            gt_rgb_image = cv2.resize(gt_rgb_image, (depth_valid_render_mask.shape[2], self.render_depth_mask.shape[1]), interpolation=cv2.INTER_CUBIC)[12:-12, :, :]
 #             
-   gt_depth_image = PILImage.fromarray((cv2.imread(gt_depth, cv2.IMREAD_UNCHANGED)* 255).astype('uint8') ).convert('RGB')
-   render_depth_image = PILImage.fromarray((img[0, : ,:, -1].detach().cpu().numpy() * (-255)).astype('uint8')).convert('RGB')
-   blend_image = PILImage.blend(render_depth_image, gt_depth_image, 0.5)
-   blend_image.save(f"./blend.png")
+#   gt_depth_image = PILImage.fromarray((cv2.imread(gt_depth, cv2.IMREAD_UNCHANGED)* 255).astype('uint8') ).convert('RGB')
+#   render_depth_image = PILImage.fromarray((img[0, : ,:, -1].detach().cpu().numpy() * (-255)).astype('uint8')).convert('RGB')
+#   blend_image = PILImage.blend(render_depth_image, gt_depth_image, 0.5)
+#   blend_image.save(f"./blend.png")
     
    
 #    depth_gt = np.loadtxt(f"./gt/depth_robot_gt.txt")

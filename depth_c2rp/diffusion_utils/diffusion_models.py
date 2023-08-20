@@ -96,7 +96,7 @@ class ScoreModelFC_Adv(nn.Module):
     """
     def __init__(self, config,
         n_joints=17, cond_n_joints=17, joint_dim=3, hidden_dim=64, embed_dim=32, cond_dim=2,
-        n_blocks=2):
+        n_blocks=2, use_groupnorm=True):
         super(ScoreModelFC_Adv, self).__init__()
 
         self.config = config
@@ -104,7 +104,8 @@ class ScoreModelFC_Adv(nn.Module):
         self.cond_n_joints = cond_n_joints
         self.joint_dim = joint_dim
         self.n_blocks = n_blocks
-
+        self.use_groupnorm = use_groupnorm
+        
         self.act = nn.SiLU()
 
         self.pre_dense= nn.Linear(n_joints * joint_dim, hidden_dim)
@@ -112,6 +113,7 @@ class ScoreModelFC_Adv(nn.Module):
         self.pre_dense_cond = nn.Linear(hidden_dim, hidden_dim)
         self.pre_gnorm = nn.GroupNorm(32, num_channels=hidden_dim)
         self.dropout = nn.Dropout(p=0.25)
+        
 
         # time embedding
         self.time_embedding_type = self.config["DIFF_MODEL"]["EMBEDDING_TYPE"]
@@ -231,12 +233,17 @@ class ScoreModelFC_Adv(nn.Module):
             # condition = batch[:, :, :3] - condition
             condition[:, :, -1] = condition[:, :, -1] * z_mask.float()  # mask the z-axis of 2d poses
         else:
-            raise RuntimeError
+            assert condition.shape[-1] == 2 # [B, j, 2]
+            condition = condition # no mask
+            
 
         # evaluation with specified mask
-        if not self.training and mask is not None:
+        if not self.training and mask is not None and condition.shape[-1] == 3:
             condition = condition * mask
-
+        
+        #print("batch.shape", batch.shape)
+        #print("condition.shape", condition.shape)
+        
         batch = batch.view(bs, -1)  # [B, j*3]
         condition = condition.view(bs, -1)  # [B, j*3]
         torch.cuda.synchronize()
@@ -254,7 +261,8 @@ class ScoreModelFC_Adv(nn.Module):
         elif self.time_embedding_type == 'positional':
             # Sinusoidal positional embeddings.
             timesteps = t
-            used_sigmas = self.sigmas[t.long()]
+            #print("self.sigmas", self.sigmas.shape)
+            #used_sigmas = self.sigmas[t.long()]
             temb = self.posit_proj(timesteps)
         else:
             raise ValueError(f'time embedding type {self.time_embedding_type} unknown.')
@@ -269,7 +277,8 @@ class ScoreModelFC_Adv(nn.Module):
         h = self.pre_dense(batch)
         h += self.pre_dense_t(temb)
         h += self.pre_dense_cond(cond)
-        h = self.pre_gnorm(h)
+        if self.use_groupnorm:
+            h = self.pre_gnorm(h)
         h = self.act(h)
         h = self.dropout(h)
 
@@ -280,7 +289,8 @@ class ScoreModelFC_Adv(nn.Module):
             h1 = getattr(self, f'b{idx+1}_dense1')(h)
             h1 += getattr(self, f'b{idx+1}_dense1_t')(temb)
             h1 += getattr(self, f'b{idx+1}_dense1_cond')(cond)
-            h1 = getattr(self, f'b{idx+1}_gnorm1')(h1)
+            if self.use_groupnorm:
+                h1 = getattr(self, f'b{idx+1}_gnorm1')(h1)
             h1 = self.act(h1)
             # dropout, maybe
             h1 = self.dropout(h1)
@@ -288,7 +298,8 @@ class ScoreModelFC_Adv(nn.Module):
             h2 = getattr(self, f'b{idx+1}_dense2')(h1)
             h2 += getattr(self, f'b{idx+1}_dense2_t')(temb)
             h2 += getattr(self, f'b{idx+1}_dense2_cond')(cond)
-            h2 = getattr(self, f'b{idx+1}_gnorm2')(h2)
+            if self.use_groupnorm:
+                h2 = getattr(self, f'b{idx+1}_gnorm2')(h2)
             h2 = self.act(h2)
             # dropout, maybe
             h2 = self.dropout(h2)
@@ -314,3 +325,187 @@ class ScoreModelFC_Adv(nn.Module):
 #        print("t15 - t10", t15 - t10)
         return res
 
+class ScoreModelFC_GENERAL_Adv(nn.Module):
+    """
+    Independent condition feature projection layers for each block
+    """
+    def __init__(self, config,
+        n_joints=17, cond_n_joints=17, joint_dim=3, hidden_dim=64, embed_dim=32, cond_dim=2,
+        n_blocks=2, use_groupnorm=True, num_angles=7):
+        super(ScoreModelFC_GENERAL_Adv, self).__init__()
+
+        self.config = config
+        self.n_joints = n_joints
+        self.num_angles=num_angles
+        self.cond_n_joints = cond_n_joints
+        self.joint_dim = joint_dim
+        self.n_blocks = n_blocks
+        self.use_groupnorm = use_groupnorm
+        
+        self.act = nn.SiLU()
+
+        self.pre_dense= nn.Linear(n_joints * joint_dim, hidden_dim)
+        self.pre_dense_t = nn.Linear(embed_dim, hidden_dim)
+        self.pre_dense_cond = nn.Linear(hidden_dim, hidden_dim)
+        self.pre_dense_joints = nn.Linear(hidden_dim, hidden_dim)
+        self.pre_gnorm = nn.GroupNorm(32, num_channels=hidden_dim)
+        self.dropout = nn.Dropout(p=0.25)
+        
+
+        # time embedding
+        self.time_embedding_type = self.config["DIFF_MODEL"]["EMBEDDING_TYPE"]
+        if self.time_embedding_type == 'fourier':
+            self.gauss_proj = GaussianFourierProjection(embed_dim=embed_dim)
+        elif self.time_embedding_type == 'positional':
+            self.posit_proj = functools.partial(get_timestep_embedding, embedding_dim=embed_dim)
+        else:
+            assert 0
+
+        self.shared_time_embed = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim),
+            self.act,
+        )
+        self.register_buffer('sigmas', torch.tensor(get_sigmas(config)))
+
+        # conditional embedding
+        self.cond_embed = nn.Sequential(
+            nn.Linear(self.cond_n_joints * cond_dim, hidden_dim),
+            self.act
+        )
+        self.joints_embed = nn.Sequential(
+            nn.Linear(self.num_angles, hidden_dim),
+            self.act
+        )
+
+
+        for idx in range(n_blocks):
+            setattr(self, f'b{idx+1}_dense1', nn.Linear(hidden_dim, hidden_dim))
+            setattr(self, f'b{idx+1}_dense1_t', nn.Linear(embed_dim, hidden_dim))
+            setattr(self, f'b{idx+1}_dense1_cond', nn.Linear(hidden_dim, hidden_dim))
+            setattr(self, f'b{idx+1}_dense1_joints', nn.Linear(hidden_dim, hidden_dim))
+            setattr(self, f'b{idx+1}_gnorm1', nn.GroupNorm(32, num_channels=hidden_dim))
+
+            setattr(self, f'b{idx+1}_dense2', nn.Linear(hidden_dim, hidden_dim))
+            setattr(self, f'b{idx+1}_dense2_t', nn.Linear(embed_dim, hidden_dim))
+            setattr(self, f'b{idx+1}_dense2_cond', nn.Linear(hidden_dim, hidden_dim))
+            setattr(self, f'b{idx+1}_dense2_joints', nn.Linear(hidden_dim, hidden_dim))
+            setattr(self, f'b{idx+1}_gnorm2', nn.GroupNorm(32, num_channels=hidden_dim))
+
+        self.post_dense = nn.Linear(hidden_dim, n_joints * joint_dim)
+    
+    def get_cond_embed(self, condition):
+        if condition.shape[-1] == 3:
+            # unified representation of 2D/3D pose
+            z_mask = torch.sum(torch.abs(condition[:, :, -1]), dim=-1, keepdims=True) > 0  # [B, 1]
+            # condition = batch[:, :, :3] - condition
+            condition[:, :, -1] = condition[:, :, -1] * z_mask.float()  # mask the z-axis of 2d poses
+        else:
+            assert condition.shape[-1] == 2 # [B, j, 2]
+            condition = condition # no mask
+#       if not self.training and mask is not None and condition.shape[-1] == 3:
+#           condition = condition * mask
+        
+        bs = condition.shape[0]
+        condition = condition.view(bs, -1)
+        cond = self.cond_embed(condition)  # [B, hidden]
+        pre_cond = self.pre_dense_cond(cond)
+        return [cond, pre_cond]
+    
+    def get_time_embed(self, t):
+        # time embedding
+        if self.time_embedding_type == 'fourier':
+            # Gaussian Fourier features embeddings.
+            used_sigmas = t
+            temb = self.gauss_proj(torch.log(used_sigmas))
+        elif self.time_embedding_type == 'positional':
+            # Sinusoidal positional embeddings.
+            timesteps = t
+            temb = self.posit_proj(timesteps)
+        else:
+            raise ValueError(f'time embedding type {self.time_embedding_type} unknown.')
+
+        temb = self.shared_time_embed(temb)
+        pre_temb = self.pre_dense_t(temb)
+        
+        return [temb, pre_temb]
+    
+    def get_joints_embed(self, joints):
+        # joints : B x 7
+        joints_embed = self.joints_embed(joints) # [B, hidden]
+        pre_joints_embed = self.pre_dense_joints(joints_embed)
+        
+        return [joints_embed, pre_joints_embed]
+
+    
+    def forward(self, joints_embed_all, prob):
+        joints_embed, pre_joints_embed = joints_embed_all
+        def forward_func(batch, t, condition, mask):
+            """
+            batch: [B, j, 3] or [B, j, 1]
+            t: [B]
+            condition: [B, j, 2 or 3]
+            mask: [B, j, 2 or 3] only used during evaluation
+            Return: [B, j, 3] or [B, j, 1] same dim as batch
+            """
+            bs = batch.shape[0]
+            batch = batch.view(bs, -1)  # [B, j*3]
+    
+            h = self.pre_dense(batch)
+            
+            temb, pre_temb = self.get_time_embed(t)
+            cond, pre_cond = self.get_cond_embed(condition)
+            h += pre_temb
+            h += pre_cond
+            h += pre_joints_embed * prob
+        
+        
+            if self.use_groupnorm:
+                h = self.pre_gnorm(h)
+            h = self.act(h)
+            h = self.dropout(h)
+    
+    
+            for idx in range(self.n_blocks):
+                h1 = getattr(self, f'b{idx+1}_dense1')(h)
+                h1 += getattr(self, f'b{idx+1}_dense1_t')(temb)
+                h1 += getattr(self, f'b{idx+1}_dense1_cond')(cond)
+                h1 += getattr(self, f'b{idx+1}_dense1_joints')(joints_embed) * prob
+                if self.use_groupnorm:
+                    h1 = getattr(self, f'b{idx+1}_gnorm1')(h1)
+                h1 = self.act(h1)
+                # dropout, maybe
+                h1 = self.dropout(h1)
+    
+                h2 = getattr(self, f'b{idx+1}_dense2')(h1)
+                h2 += getattr(self, f'b{idx+1}_dense2_t')(temb)
+                h2 += getattr(self, f'b{idx+1}_dense2_cond')(cond)
+                h2 += getattr(self, f'b{idx+1}_dense2_joints')(joints_embed) * prob
+                if self.use_groupnorm:
+                    h2 = getattr(self, f'b{idx+1}_gnorm2')(h2)
+                h2 = self.act(h2)
+                # dropout, maybe
+                h2 = self.dropout(h2)
+                
+                
+                
+                h = h + h2
+    
+            res = self.post_dense(h)  # [B, j*3]
+            res = res.view(bs, self.n_joints, -1)  # [B, j, 3]
+    
+            ''' normalize the output '''
+            if self.config["DIFF_MODEL"]["SCALE_BY_SIGMA"]:
+                used_sigmas = used_sigmas.reshape((bs, 1, 1))
+                res = res / used_sigmas
+    
+    
+            return res 
+        return forward_func
+        
+    
+    def fix_joints(self, joints, prob):
+        joints_embed_all = self.get_joints_embed(joints)
+        
+        return joints_embed_all, prob
+    
+        

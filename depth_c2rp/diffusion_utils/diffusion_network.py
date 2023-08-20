@@ -25,7 +25,7 @@ except ImportError as e:
         print('Tensorboard is not Installed')
         
         
-from depth_c2rp.diffusion_utils.diffusion_models import ScoreModelFC_Adv
+from depth_c2rp.diffusion_utils.diffusion_models import ScoreModelFC_Adv, ScoreModelFC_GENERAL_Adv
 from depth_c2rp.configs.config import update_config
 from depth_c2rp.diffusion_utils import diffusion_sde_lib as sde_lib
 from depth_c2rp.diffusion_utils.diffusion_losses import optimization_manager, get_step_fn
@@ -51,6 +51,33 @@ def load_simplenet_model(simplenet_model, path, device):
     #print(f'restored "{path}" model. Key errors:')
     return simplenet_model
 
+def load_single_simplenet_model(simplenet_model, path, device):
+    state_dict = {}
+    simplenet_checkpoint = torch.load(path, map_location=device)["model"]
+    for key, value in simplenet_checkpoint.items():
+        if key[:6] == "module":
+            new_key = "simplenet." + key[6:]
+        elif "module" not in key:
+            new_key = "simplenet." + key
+        else:
+            raise ValueError
+        state_dict[new_key] = value
+    simplenet_model.load_state_dict(state_dict, strict=True)
+    #print(f'restored "{path}" model. Key errors:')
+    return simplenet_model
+
+def load_single_heatmap_model(heatmap_model, path, device):
+    state_dict = {}
+    heatmap_checkpoint = torch.load(path, map_location=device)["model"]
+    for key, value in heatmap_checkpoint.items():
+        if key[:6] == "module":
+            new_key =  key[7:]
+        elif "module" not in key:
+            new_key = key
+        state_dict[new_key] = value
+    heatmap_model.load_state_dict(state_dict, strict=True)
+    return heatmap_model
+    
 class build_simple_network(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -68,6 +95,7 @@ class build_simple_network(nn.Module):
         all_dof_pred = joints_angle_pred[:, :, None] # B x 7 x 1
         
         if joints_1d_gt is not None and gt_angle_flag: 
+            print("gt")
             all_dof_pred = joints_1d_gt   
         joints_3d_rob_pred = compute_3n_loss_42_rob(all_dof_pred, joints_3d_pred.device)
         
@@ -83,18 +111,34 @@ class build_diffusion_network(nn.Module):
     def __init__(self, cfg, device=torch.device("cpu")):
         super().__init__()
         self.cfg = cfg
+        self.model_name = self.cfg["DIFF_MODEL"].get("MODEL_NAME", "normal")
         self.device = device
-            
-        self.model = ScoreModelFC_Adv(
-        self.cfg,
-        n_joints=self.cfg["DIFF_MODEL"]["NUM_JOINTS"],
-        cond_n_joints=self.cfg["DIFF_MODEL"]["COND_NUM_JOINTS"],
-        joint_dim=self.cfg["DIFF_MODEL"]["JOINT_DIM"],
-        hidden_dim=self.cfg["DIFF_MODEL"]["HIDDEN_DIM"],
-        embed_dim=self.cfg["DIFF_MODEL"]["EMBED_DIM"],
-        cond_dim=self.cfg["DIFF_MODEL"]["CONDITION_DIM"],
-        # n_blocks=1,
-        )
+        
+        if self.model_name == "normal":
+            self.model = ScoreModelFC_Adv(
+            self.cfg,
+            n_joints=self.cfg["DIFF_MODEL"]["NUM_JOINTS"],
+            cond_n_joints=self.cfg["DIFF_MODEL"]["COND_NUM_JOINTS"],
+            joint_dim=self.cfg["DIFF_MODEL"]["JOINT_DIM"],
+            hidden_dim=self.cfg["DIFF_MODEL"]["HIDDEN_DIM"],
+            embed_dim=self.cfg["DIFF_MODEL"]["EMBED_DIM"],
+            cond_dim=self.cfg["DIFF_MODEL"]["CONDITION_DIM"],
+            use_groupnorm=self.cfg["DIFF_MODEL"]["USE_GROUPNORM"],
+            # n_blocks=1,
+            )
+        elif self.model_name == "general":
+            self.model = ScoreModelFC_GENERAL_Adv(
+            self.cfg,
+            n_joints=self.cfg["DIFF_MODEL"]["NUM_JOINTS"],
+            cond_n_joints=self.cfg["DIFF_MODEL"]["COND_NUM_JOINTS"],
+            joint_dim=self.cfg["DIFF_MODEL"]["JOINT_DIM"],
+            hidden_dim=self.cfg["DIFF_MODEL"]["HIDDEN_DIM"],
+            embed_dim=self.cfg["DIFF_MODEL"]["EMBED_DIM"],
+            cond_dim=self.cfg["DIFF_MODEL"]["CONDITION_DIM"],
+            use_groupnorm=self.cfg["DIFF_MODEL"]["USE_GROUPNORM"],
+            num_angles=self.cfg["DIFF_MODEL"].get("NUM_ANGLES", 7),
+            # n_blocks=1,
+            )
         self.scaler = lambda x: x
         self.inverse_scaler = lambda x: x
         
@@ -103,7 +147,12 @@ class build_diffusion_network(nn.Module):
             self.sde = sde_lib.subVPSDE(beta_min=self.cfg["DIFF_MODEL"]["BETA_MIN"], 
                                         beta_max=self.cfg["DIFF_MODEL"]["BETA_MAX"], 
                                         N=self.cfg["DIFF_MODEL"]["NUM_SCALES"])
-            self.sampling_eps = 1e-3
+            self.sampling_eps = self.cfg["DIFF_SAMPLING"]["SAMPLING_EPS"]
+        elif self.cfg["DIFF_TRAINING"]["SDE"].lower() == 'vpsde':
+            self.sde = sde_lib.VPSDE(beta_min=self.cfg["DIFF_MODEL"]["BETA_MIN"], 
+                                beta_max=self.cfg["DIFF_MODEL"]["BETA_MAX"], 
+                                N=self.cfg["DIFF_MODEL"]["NUM_SCALES"])
+            self.sampling_eps = self.cfg["DIFF_SAMPLING"]["SAMPLING_EPS"]
         else:
             sde_name = self.cfg["DIFF_TRAINING"]["SDE"]
             raise NotImplementedError(f"SDE {sde_name} unknown.")
@@ -118,11 +167,16 @@ class build_diffusion_network(nn.Module):
         self.sampling_fn = sampling.get_sampling_fn(self.cfg, self.sde, self.sampling_shape, self.inverse_scaler, self.sampling_eps, device=self.device) 
         self.train_step_fn = get_step_fn(self.sde, train=True,
                                        reduce_mean=False, continuous=self.continuous,
-                                       likelihood_weighting=self.likelihood_weighting)
+                                       likelihood_weighting=self.likelihood_weighting, eps=self.cfg["DIFF_TRAINING"]["EPS"])
         
-    def forward(self, batch, condition, optimizer, ema, step):
-        state = dict(optimizer=optimizer, model=self.model, ema=ema, step=step)
-        cur_loss = self.train_step_fn(state, batch, condition)
+    def forward(self, batch, condition, optimizer, ema, step, t_start=None, t_end=None, joints=None, prob=None):
+        if self.model_name == "normal":
+            state = dict(optimizer=optimizer, model=self.model, ema=ema, step=step)
+        elif self.model_name == "general":
+            assert joints is not None and prob is not None
+            joints_embed, prob = self.model.fix_joints(joints, prob)
+            state = dict(optimizer=optimizer, model=self.model(joints_embed, prob), ema=ema, step=step)
+        cur_loss = self.train_step_fn(state, batch, condition,t_start=t_start, t_end=t_end, train_flag=self.model.training)
         return cur_loss, state
         
 

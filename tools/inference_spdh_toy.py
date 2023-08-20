@@ -48,7 +48,8 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
                                      three_d_noise_std1=cfg["THREE_D_NOISE_STD1"], 
                                      three_d_noise_std2=cfg["THREE_D_NOISE_STD2"], 
                                      three_d_noise_std3=cfg["THREE_D_NOISE_STD3"], 
-                                     three_d_random_drop=cfg["THREE_D_RANDOM_DROP"]
+                                     three_d_random_drop=cfg["THREE_D_RANDOM_DROP"],
+                                     kps_14_name=cfg["KPS_14_NAME"]
                                      )
     print("three_d_norm", cfg["THREE_D_NORM"])
     print("three_d_noise_mu1", cfg["THREE_D_NOISE_MU1"])
@@ -89,12 +90,15 @@ def network_inference(model, cfg, epoch_id, device, mAP_thresh=[0.02, 0.11, 0.01
             loss += torch.mean(torch.abs(joints_1d_pred - joints_1d_gt), dim=0)
             
             angles_acc_mean = batch_acc_from_joint_angles(joints_1d_pred[:, :, None].detach().cpu().numpy(), joints_1d_gt[:, :, None].detach().cpu().numpy(), acc_thresholds) # 
+            #print("np.array", np.array(angles_acc_mean).shape)
             angles_acc.append(angles_acc_mean)
     
     print("loss",loss / len(test_loader))
-            
-
+    print("len angles acc", len(angles_acc))
+    angles_acc = np.concatenate(angles_acc, axis=0)
+    print((np.array(angles_acc)).shape)
     angles_results = np.round(np.mean(angles_acc,axis=0)*100, 2)
+    print("angles_results", angles_results)
     angles_dict = dict()
     
     # Print File and Save Results

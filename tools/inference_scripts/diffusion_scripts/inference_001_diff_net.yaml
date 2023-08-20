@@ -26,12 +26,13 @@ DATASET:
   DEPTH_RANGE_TYPE : padding
   SURROUNDING_REMOVALS : false
   SIGMA         : 3.0
-  AUG           : false
+  AUG           : true
   AUG_TYPE      : 3d  
 
 DIFF_MODEL:                                                                          
   SEED          : 317                                # name of the model you are using
   NUM_JOINTS    : 14
+  COND_NUM_JOINTS : 14
   TASK          : 3d_RPE
   INPUT_TYPE    : XYZ
   OUTPUT_TYPE   : 2.5dH
@@ -72,7 +73,7 @@ DIFF_MODEL:
   
 DIFF_TRAINING:
   FULL          : false
-  BATCH_SIZE    : 150             # batch size used to train
+  BATCH_SIZE    : 1000             # batch size used to train
   EPOCHS        : 20000             # number of epochs to train
   GT_ANGLE_FLAG : false
   EVAL_INTERVAL : 10              # evaluation interval during training
@@ -82,7 +83,6 @@ DIFF_TRAINING:
   N_ITERS       : 950001
   SNAPSHOT_FREQ : 50000
   LOG_FREQ      : 50
-  EVAL_FREQ     : 100
   SNAPSHOT_FREQ_FOR_PREEMPTION : 10000
   LIKELIHOOD_WEIGHTING : false
   SNAPSHOT_SAMPLING : true
@@ -91,8 +91,11 @@ DIFF_TRAINING:
   DATA_SCALE : 30
   COND_POSE_MASK_PROB : 0.0
   COND_PART_MASK_PROB : 0.0
-  COND_JOINT_MASK_PROB : 0.0 # function ???
+  COND_JOINT_MASK_PROB : 0.1 # function ???
   COND_3D_PROB : 0.1
+  COND_UV_STD  : 4.5
+  LARGE_COND_UV_STD : 10.0
+  PROB_LARGE_COND_UV : 0.1
   SDE : subvpsde
 
 DIFF_SAMPLING:
@@ -100,16 +103,16 @@ DIFF_SAMPLING:
   NOISE_REMOVAL : true
   PROBABILITY_FLOW : false
   SNR : 0.6
-  METHOD : ode
+  METHOD : dpm_solver
   PREDICTOR : euler_maruyama
   CORRECTOR : none
 
 DIFF_EVAL:
   BEGIN_CKPT : 9
   END_CKPT : 26
-  BATCH_SIZE : 30
+  BATCH_SIZE : 3000
   ENABLE_SAMPLING : false
-  NUM_SAMPLES : 1
+  NUM_SAMPLES : 10
   ENABLE_LOSS : true
   ENABLE_BPD  : false
   BPD_DATASET : test 

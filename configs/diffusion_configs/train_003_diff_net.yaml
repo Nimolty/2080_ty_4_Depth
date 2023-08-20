@@ -73,7 +73,7 @@ DIFF_MODEL:
   
 DIFF_TRAINING:
   FULL          : false
-  BATCH_SIZE    : 30             # batch size used to train
+  BATCH_SIZE    : 800             # batch size used to train
   EPOCHS        : 20000             # number of epochs to train
   GT_ANGLE_FLAG : false
   EVAL_INTERVAL : 10              # evaluation interval during training
@@ -103,7 +103,7 @@ DIFF_SAMPLING:
   NOISE_REMOVAL : true
   PROBABILITY_FLOW : false
   SNR : 0.6
-  METHOD : ode
+  METHOD : dpm_solver
   PREDICTOR : euler_maruyama
   CORRECTOR : none
 

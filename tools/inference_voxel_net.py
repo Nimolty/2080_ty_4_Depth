@@ -327,8 +327,8 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                 
                 print("t2 - t1", t2 - t1)
                 
-                if gt_angle_flag:
-                    joints_angle_pred = joints_1d_gt[..., None]
+#                if gt_angle_flag:
+#                    joints_angle_pred = joints_1d_gt[..., None]
                 
                 joints_angle_pred_lst.append(joints_angle_pred)
                 joints_angle_gt_lst.append(joints_1d_gt)

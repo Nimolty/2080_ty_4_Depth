@@ -80,7 +80,8 @@ def main(cfg):
                                      three_d_noise_std1=cfg["THREE_D_NOISE_STD1"], 
                                      three_d_noise_std2=cfg["THREE_D_NOISE_STD2"], 
                                      three_d_noise_std3=cfg["THREE_D_NOISE_STD3"], 
-                                     three_d_random_drop=cfg["THREE_D_RANDOM_DROP"]
+                                     three_d_random_drop=cfg["THREE_D_RANDOM_DROP"],
+                                     kps_14_name=cfg["KPS_14_NAME"]
                                      )
     
     print("three_d_norm", cfg["THREE_D_NORM"])

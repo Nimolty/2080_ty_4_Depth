@@ -18,7 +18,7 @@ from pyquaternion import Quaternion
 import glob
 os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1" 
 
-from depth_c2rp.utils.spdh_utils import augment_3d, depthmap2pointcloud, depthmap2points, overlay_points_on_image, mosaic_images, pointcloud2depthmap, hole_filling
+from depth_c2rp.utils.spdh_utils import augment_3d, depthmap2pointcloud, depthmap2points, overlay_points_on_image, mosaic_images, pointcloud2depthmap, hole_filling, nearest_hole_filling
 from depth_c2rp.utils.spdh_utils import apply_depth_normalization_16bit_image, heatmap_from_kpoints_array, gkern, compute_rigid_transform
 
 JOINT_NAMES = [f"panda_joint_3n_{i+1}" for i in range(14)]
@@ -33,7 +33,7 @@ class Voxel_dataset(Dataset):
                  raw_img_size: tuple = (640, 360), input_img_size: tuple = (384, 216), sigma: int = 4., norm_type: str = 'mean_std',
                  network_input: str = 'D', network_output: str = 'H', network_task: str = '3d_RPE',
                  depth_range: tuple = (500, 3380, 15), depth_range_type: str = 'normal', aug_type: str = '3d',
-                 aug_mode: bool = True, noise: bool = False, demo: bool = False, load_mask: bool = False, mask_dict : dict = {}, unnorm_depth: bool=False, cx_delta: int = 0, cy_delta: int = 0, change_intrinsic: bool=False, uv_input : bool = False):
+                 aug_mode: bool = True, noise: bool = False, demo: bool = False, load_mask: bool = False, mask_dict : dict = {}, unnorm_depth: bool=False, cx_delta: int = 0, cy_delta: int = 0, change_intrinsic: bool=False, uv_input : bool = False, intrin_aug_params : dict = {},):
         assert init_mode in ['train', 'test']
 
         self.train_dataset_dir = Path(train_dataset_dir)
@@ -62,6 +62,7 @@ class Voxel_dataset(Dataset):
         self.unnorm_depth = unnorm_depth
         self.change_intrinsic = change_intrinsic
         self.uv_input = uv_input
+        self.intrin_aug_params = intrin_aug_params
         self.data = self.load_data()
 
     def __len__(self):
@@ -81,6 +82,9 @@ class Voxel_dataset(Dataset):
             raise ValueError
         t1_mid = time.time()
         depth_img = cv2.resize(depth_img, tuple(self.input_img_size), interpolation=cv2.INTER_NEAREST)
+        #rgb_img = cv2.imread(sample["rgb_file"])
+        #rgb_img = cv2.resize(rgb_img, tuple(self.input_img_size), interpolation=cv2.INTER_LINEAR)
+        
         
         H, W = depth_img.shape
         assert H == self.input_img_size[1]
@@ -117,6 +121,7 @@ class Voxel_dataset(Dataset):
             #print("torch.max", np.max(depth_img))
                 
             depth_img = cv2.copyMakeBorder(depth_img, padding, padding, 0, 0, cv2.BORDER_CONSTANT, 0)
+            #rgb_img = cv2.copyMakeBorder(rgb_img, padding, padding, 0, 0, cv2.BORDER_CONSTANT, 0)
         
         t2 = time.time()
         # copy unnormed depth img
@@ -184,7 +189,7 @@ class Voxel_dataset(Dataset):
                 points = depthmap2pointcloud(depth_img / 1000, fx=fx, fy=fy, cx=intrinsic[0, 2],
                                              cy=intrinsic[1, 2])
                 points = points[points[:, 2] != 0]
-                depth_img, joints_3D_Z, R2C_Mat_after_aug, R2C_Trans_after_aug = augment_3d(intrinsic, points, depth_img, joints_3D_Z, R2C_Mat_before_aug, R2C_Trans_before_aug)
+                intrinsic, depth_img, joints_3D_Z, R2C_Mat_after_aug, R2C_Trans_after_aug = augment_3d(intrinsic, points, depth_img, joints_3D_Z, R2C_Mat_before_aug, R2C_Trans_before_aug,self.intrin_aug_params)
                 depth_img = depth_img * 1000 
                 if self.noise:
                     seq = iaa.Sequential([
@@ -200,7 +205,7 @@ class Voxel_dataset(Dataset):
             
         if self.change_intrinsic and self.mode == "real":
             # initialize intrinsic matrix
-            train_cam_settings_data = json.load(open(str(self.train_dataset_dir / "train_camera_settings.json"), 'r'))
+            train_cam_settings_data = json.load(open(str(self.dataset_dict[self.mode] / "train_camera_settings.json"), 'r'))
             train_fx, train_fy = train_cam_settings_data["camera_settings"][0]["intrinsic_settings"]["fx"]* scale_x, train_cam_settings_data["camera_settings"][0]["intrinsic_settings"]["fy"]* scale_y
             # Pay Attention to the cy!!!
             train_cx, train_cy = train_cam_settings_data["camera_settings"][0]["intrinsic_settings"]["cx"]* scale_x, train_cam_settings_data["camera_settings"][0]["intrinsic_settings"]["cy"]* scale_y
@@ -229,22 +234,42 @@ class Voxel_dataset(Dataset):
                                           fx=train_intrinsic[0, 0],
                                           fy=train_intrinsic[1, 1],
                                           cx=train_intrinsic[0, 2],
-                                          cy=train_intrinsic[1, 2]).astype(depth_img.dtype)
-            depth_img = hole_filling(depth_img, kernel_size=2) * 1000
+                                          cy=train_intrinsic[1, 2]).astype(depth_img.dtype) * 1000
+            for i in range(3):                      
+                depth_img = nearest_hole_filling(depth_img, kernel_size=2, nearest_num=4)                            
+            rgb_img_wohole = depth_img.copy()
+#            rgb_img_wohole = hole_filling(rgb_img_wohole, kernel_size=2)   
+            
+            
+#            print("detyp", depth_img.dtype) 
+#            depth_img = hole_filling(depth_img, kernel_size=2) 
+#            depth_img = nearest_hole_filling(depth_img, kernel_size=2, nearest_num=20) 
+            
+#            rgb_img_wohole = hole_filling(rgb_img_wohole, kernel_size=6)   
+#            
+#            depth_img = hole_filling(depth_img, kernel_size=6)  
+             
             point3d = joints_3D_Z.copy()
             #point3d[..., 1] *= -1  # I dont' known whether to invert Y axis direction for 2D reprojection
             joints_2D = (train_intrinsic @ point3d[..., None]).squeeze(-1)
             joints_2D = (joints_2D / joints_2D[:, -1:])[:, :2]
             
             intrinsic = train_intrinsic
-            fx = train_fx
+            fx = train_fx 
             fy = train_fy
             cx = train_cx
             cy = train_cy
+            
+#            depth_img[:84, :,] = 0
+#            depth_img[300:, :,] = 0 
         
             
         #print(intrinsic)
         # create visible depth map
+        depth_img[depth_img > 5000.0] *= 0.0
+        
+        
+        depth_vis = depth_img.copy()
         depth_img_vis = ((depth_img * 255) / depth_img.max()).astype(np.uint8)[..., None]
         depth_img_vis = np.concatenate([depth_img_vis, depth_img_vis, depth_img_vis], -1)
         
@@ -277,10 +302,36 @@ class Voxel_dataset(Dataset):
         joints_3D_depth *= z[..., None]
         
         t5 = time.time()
-        # compute XYZ image
+        
+#        if self.change_intrinsic:
+#            flag = "CHANGE"
+#        else:
+#            flag = "UNCHANGE"
+#        save_id = sample['depth_file'].split("/")[-1].replace("npy", "")
+#        save_path = os.path.join(f"/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/83/PRED_POS/", flag)    
+#        if not os.path.exists(save_path):
+#            os.makedirs(save_path)
+#        new_path = os.path.join(save_path, save_id + "wohf.txt")
+#        xyz_img = depthmap2points(depth_img / 1000, fx=fx, fy=fy, cx=intrinsic[0, 2], cy=intrinsic[1, 2])
+#        xyz_img[depth_img == 0] = 0
+#        np.savetxt(new_path, xyz_img.reshape(-1, 3))
+#       
+#        depth_img = hole_filling(depth_img, kernel_size=2)   
+#        # compute XYZ image
         if "XYZ" in self.network_input:
             xyz_img = depthmap2points(depth_img / 1000, fx=fx, fy=fy, cx=intrinsic[0, 2], cy=intrinsic[1, 2])
             xyz_img[depth_img == 0] = 0
+            
+#            new_path = os.path.join(save_path, save_id + "whf.txt")
+#            np.savetxt(new_path, xyz_img.reshape(-1, 3))
+            
+            
+            
+            try:
+                rgb_img_wohole = depthmap2points(rgb_img_wohole / 1000, fx=fx, fy=fy, cx=intrinsic[0, 2], cy=intrinsic[1, 2])
+                rgb_img_wohole[rgb_img_wohole == 0] = 0
+            except:
+                pass
             
             xyz_img_scale = xyz_img.copy()
             if self.mode == "real" or self.mode == "val":
@@ -340,6 +391,7 @@ class Voxel_dataset(Dataset):
         t6 = time.time()
         joints_2d_dz = ((joints_3D_Z[:, 2:3] * 1000 - Z_min) / dZ)
         #print("intrinsic", intrinsic)
+        #print("intrinsic", intrinsic)
         #print(ind)
         #print("t4  - t3", t4 - t3)
         
@@ -364,6 +416,7 @@ class Voxel_dataset(Dataset):
             "depth_path" : sample['depth_file'],
             "uv_off": torch.from_numpy(offset),
             "uv_ind": torch.from_numpy(ind).type(torch.int64), 
+            "change_intrinsic" : self.change_intrinsic,
         }
         if self.network_task == '2d_RPE':
             output['joints_3D_depth'] = joints_3D_depth
@@ -372,9 +425,17 @@ class Voxel_dataset(Dataset):
                 output['heatmap_rgb'] = torch.from_numpy(heatmaps.astype(np.float32).transpose(2, 0, 1))
         else:
             output['heatmap_25d'] = torch.from_numpy(heatmaps_25d.astype(np.float32))
+        
         if "XYZ" in self.network_input:
             output['xyz_img'] = xyz_img  # H x W x 3
-            rgb_img = xyz_img.transpose(2, 0, 1) # 3 x H x W
+            if "RGB" not in self.network_input:
+                rgb_img = xyz_img.transpose(2, 0, 1) # 3 x H x W
+            
+            try:
+                rgb_img = rgb_img_wohole.transpose(2, 0, 1)
+                #print("wohole!")
+            except:
+                pass
             
             if self.uv_input:
                 u_input, v_input = np.meshgrid(np.arange(xyz_img.shape[1]), np.arange(xyz_img.shape[0]))
@@ -383,6 +444,15 @@ class Voxel_dataset(Dataset):
                 output["rgb_img"] = rgb_img
             
             output["xyz_img_scale"] = xyz_img_scale.transpose(2, 0, 1)
+        
+        if "D" in self.network_input:
+            rgb_img = depth_img[None, ...]
+            output["rgb_img"] = rgb_img
+        
+        if "RGB" in self.network_input:
+            rgb_img = ((rgb_img / 255. - 0.5) / 0.5).transpose(2, 0, 1)
+            output["rgb_img"] = rgb_img
+        
         if self.load_mask:
             output["mask"] = torch.from_numpy(mask_file_res).float()
         
@@ -406,6 +476,7 @@ class Voxel_dataset(Dataset):
     def real(self):
         self.mode = "real"
         self.aug_mode = False
+    
 
     @property
     def mode(self):
@@ -417,7 +488,7 @@ class Voxel_dataset(Dataset):
         self._mode = value
 
     def load_data(self):
-        dataset_dict = {"train" : self.train_dataset_dir,
+        self.dataset_dict = {"train" : self.train_dataset_dir,
                         "val" : self.val_dataset_dir,
                         "real" : self.real_dataset_dir,}
         splits = ["train", "val", "real"]
@@ -425,18 +496,19 @@ class Voxel_dataset(Dataset):
         for split in splits:
             if split == "train" or split == "val":
                 iter = 0
-                dataset_dir = dataset_dict[split]
-                rgb_files = glob.glob(os.path.join(dataset_dir, "*", "*.npy"))
-                rgb_files.sort()
-                for rgb_file in tqdm(rgb_files, f"Loading {split} ..."):
+                dataset_dir = self.dataset_dict[split]
+                depth_files = glob.glob(os.path.join(dataset_dir, "*", "*.npy"))
+                depth_files.sort()
+                for depth_file in tqdm(depth_files, f"Loading {split} ..."):
                      # rgb_file like this : '/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0201/10443/0029_color.png'
-                    scene_id, frame_name = rgb_file.split('/')[-2], rgb_file.split('/')[-1]
+                    scene_id, frame_name = depth_file.split('/')[-2], depth_file.split('/')[-1]
                     img_name = f"{scene_id}_{frame_name}"
                     
                     # Here the dataset requires depth 8 and depth 16, so how to do that?
-                    depth_file = rgb_file
-                    depth_pf_file = rgb_file
-                    joints_file = rgb_file.replace('simDepthImage.npy', 'meta.json')
+                    #depth_file = rgb_file
+                    rgb_file = depth_file.replace('simDepthImage.npy', 'color.png')
+                    depth_pf_file = depth_file
+                    joints_file = depth_file.replace('simDepthImage.npy', 'meta.json')
                     with open(joints_file, 'r') as fd:
                         json_data = json.load(fd)[0]
                     json_keypoints_data = json_data["keypoints"]                    
@@ -473,7 +545,7 @@ class Voxel_dataset(Dataset):
                     data[split].append(sample)
             
             elif split == "real":
-                dataset_dir = dataset_dict[split]
+                dataset_dir = self.dataset_dict[split]
                 depth_files = glob.glob(os.path.join(dataset_dir, "*.npy"))  
                  
                 print("length of dataset_dir", len(depth_files))
@@ -484,7 +556,8 @@ class Voxel_dataset(Dataset):
                     frame_name = (depth_file.split('/')[-1]).replace(".npy", "")
                     
                     # Here the dataset requires depth 8 and depth 16, so how to do that?
-                    meta_file = depth_file.replace('npy', 'json')
+                    rgb_file = depth_file.replace('npy', 'png')
+                    meta_file = depth_file.replace('npy', 'json') 
                     with open(meta_file, 'r') as fd:
                         json_data = json.load(fd)[0]
                     json_keypoints_data = json_data["keypoints"]
@@ -510,7 +583,7 @@ class Voxel_dataset(Dataset):
     
                     sample = {
                             "depth_file" : depth_file,        # mm
-                            "rgb_file" : depth_file,
+                            "rgb_file" : rgb_file,
                             'joints': joints_pos,             # [tx, ty, tz, qw, qx, qy, qz]
                             "joints_8" : joints_8_pos, 
                             "joints_kps" : json_keypoints_pos,

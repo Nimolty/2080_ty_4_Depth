@@ -20,6 +20,31 @@ import torch
 from depth_c2rp.diffusion_utils import diffusion_sde_lib as sde_lib
 import numpy as np
 
+def average_quaternion_batch(Q, weights=None):
+    """calculate the average quaternion of the multiple quaternions
+    Args:
+        Q (tensor): [B, num_quaternions, 4]
+        weights (tensor, optional): [B, num_quaternions]. Defaults to None.
+
+    Returns:
+        oriented_q_avg: average quaternion, [B, 4]
+    """
+    
+    if weights is None:
+        weights = torch.ones((Q.shape[0], Q.shape[1]), device=Q.device) / Q.shape[1]
+    A = torch.zeros((Q.shape[0], 4, 4), device=Q.device)
+    weight_sum = torch.sum(weights, axis=-1)
+
+    oriented_Q = ((Q[:, :, 0:1] > 0).float() - 0.5) * 2 * Q
+    A = torch.einsum("abi,abk->abik", (oriented_Q, oriented_Q))
+    A = torch.sum(torch.einsum("abij,ab->abij", (A, weights)), 1)
+    A /= weight_sum.reshape(A.shape[0], -1).unsqueeze(-1).repeat(1, 4, 4)
+
+    q_avg = torch.linalg.eigh(A)[1][:, :, -1]
+    oriented_q_avg = ((q_avg[:, 0:1] > 0).float() - 0.5) * 2 * q_avg
+    return oriented_q_avg
+
+
 def diff_save_weights(epoch, model, optimizer, ema, step, save_path):
     save_dict = {
               'epoch': epoch,
@@ -130,10 +155,11 @@ def get_model_fn(model, train=False):
       A tuple of (model output, new mutable states)
     """
     if not train:
-      model.eval()
+      #print("not train !!!")
+      #model.eval()
       return model(x, labels, condition, mask)
     else:
-      model.train()
+      #model.train()
       return model(x, labels, condition, mask)
 
   return model_fn
@@ -158,13 +184,28 @@ def get_noise_fn(sde, model, condition, mask, train=False, continuous=False):
       # For VP-trained models, t=0 corresponds to the lowest noise level
       # The maximum value of time embedding is assumed to 999 for
       # continuously-trained models.
-      labels = t * 999
+      labels = t
+#      print("x.shape", x.shape)
+#      print("labels.shape", labels.shape)
+#      print("condition.shape", condition.shape)
+#      print("mask.shape", mask.shape)
+      noise = model_fn(x, labels, condition, mask)
+      return noise
+  elif isinstance(sde, sde_lib.VPSDE) and (not continuous):
+    def noise_fn(x, t):
+      labels = t
+      noise = model_fn(x, labels, condition, mask)
+      return noise
+  elif isinstance(sde, sde_lib.subVPSDE) and (not continuous):
+    def noise_fn(x, t):
+      labels = t
       noise = model_fn(x, labels, condition, mask)
       return noise
   elif isinstance(sde, sde_lib.subVPSDE) and continuous:
     def noise_fn(x, t):
-      labels = t * 999
+      labels = t 
       noise = model_fn(x, labels, condition, mask)
+      std = sde.marginal_prob(torch.zeros_like(x), t)[1]
       return noise
   else:
     raise NotImplementedError(f"SDE class {sde.__class__.__name__} not yet supported.")
@@ -184,6 +225,7 @@ def get_score_fn(sde, model, train=False, continuous=False):
     A score function.
   """
   model_fn = get_model_fn(model, train=train)
+  #print("continuous", continuous)
 
   if isinstance(sde, sde_lib.VPSDE) or isinstance(sde, sde_lib.subVPSDE):
     def score_fn(x, t, condition, mask):
@@ -206,8 +248,12 @@ def get_score_fn(sde, model, train=False, continuous=False):
         labels = t * (sde.N - 1)  # [B]
         score = model_fn(x, labels, condition, mask)
         std = sde.sqrt_1m_alphas_cumprod.to(labels.device)[labels.squeeze(-1).long()]
-
-      score = -score / std[:, None, None]  # [B, j, 3]
+      
+      if continuous:
+          score = -score / std[:, None, None]  # [B, j, 3]
+      else:
+          print("score !!!")
+          score = score
       return score
 
   elif isinstance(sde, sde_lib.VESDE):

@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=1 python /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/tools/train_simple_baseline_net_single.py --exp_id simple_1 --cfg "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/simple_baseline_configs/train_001.yaml"

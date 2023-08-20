@@ -23,12 +23,16 @@ import numpy as np
 import time
 import abc
 from scipy import integrate
+import os
+
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
 
 from depth_c2rp.diffusion_utils.diffusion_utils import from_flattened_numpy, to_flattened_numpy, get_score_fn, get_noise_fn
 from depth_c2rp.diffusion_utils import diffusion_sde_lib as sde_lib
 from depth_c2rp.diffusion_utils import diffusion_utils as mutils
-from depth_c2rp.diffusion_utils.diffusion_dpm_solver import NoiseScheduleSubVP, DPM_Solver
-
+from depth_c2rp.diffusion_utils.diffusion_dpm_solver import NoiseScheduleSubVP, DPM_Solver, NoiseScheduleVP
+from depth_c2rp.diffusion_utils.diffusion_ddim_solver import get_beta_schedule, generalized_steps, ddpm_steps
 #from .utils import from_flattened_numpy, to_flattened_numpy, get_score_fn
 #from lib.algorithms.advanced import sde_lib
 #from . import utils as mutils
@@ -113,15 +117,25 @@ def get_sampling_fn(config, sde, shape, inverse_scaler, eps, device=None):
     sampling_fn = get_dpm_solver_sampler(sde=sde,
                                   shape=shape,
                                   inverse_scaler=inverse_scaler,
-                                  steps=10,
-                                  eps=1e-3,
-                                  skip_type="logSNR",
-                                  method="singlestep",
+                                  steps=50,
+                                  #eps=1e-3, 
+                                  skip_type="time_uniform",
+                                  method="multistep",
                                   order=3,
                                   denoise=False,
-                                  algorithm_type="dpmsolver",
+                                  algorithm_type="dpmsolver++",
                                   device=device)
-
+  elif sampler_name.lower() == "ddim_solver":
+    sampling_fn = get_ddim_sampler(sde=sde, 
+                                   shape=shape, 
+                                   inverse_scaler=inverse_scaler, 
+                                   sampling_type="generalized",
+                                   beta_schedule="linear", 
+                                   timesteps=50, 
+                                   num_timesteps=1000,
+                                   skip_type="time_uniform", 
+                                   device=device,
+                                   continuous=config["DIFF_TRAINING"]["CONTINUOUS"],)
   # Predictor-Corrector sampling. Predictor-only and Corrector-only samplers are special cases.
   elif sampler_name.lower() == 'pc':
     predictor_name = config["DIFF_SAMPLING"]["PREDICTOR"].lower()
@@ -478,7 +492,7 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
   corrector_imputation_update_fn = get_imputation_update_fn(corrector_update_fn)
 
 
-  def pc_sampler(model, condition, denoise_x=None, args=None):
+  def pc_sampler(model, condition, shape=shape, num_samples=None, denoise_x=None, args=None):
     """ The PC sampler funciton.
 
     Args:
@@ -596,9 +610,16 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
 #        print("N", sde.N)
 
       trajs = np.stack(trajs, axis=0)  # [t, b, j, 3]
-      x_mean = x_mean.cpu().numpy()
-      trajs[-1] = x_mean  # last step == x_mean
-      return trajs, x_mean if denoise else x
+      x_mean = x_mean
+      trajs[-1] = x_mean.detach().cpu().numpy()  # last step == x_mean
+      
+      trajs = torch.from_numpy(np.array(trajs)).float().to(device)
+      print("trajs.shape", trajs.shape)
+      trajs = trajs.reshape(trajs.shape[0], num_samples, -1, trajs.shape[2], trajs.shape[3]) # steps x num_samples x bs x N x 3
+      trajs = trajs.permute(2, 1, 0, 3, 4)  # bs x num_samples x steps x N x 3
+      print("trajs.another shape", trajs.shape)
+      
+      return trajs, [x_mean] if denoise else x
 
   return pc_sampler
 
@@ -638,7 +659,7 @@ def get_ode_sampler(sde, shape, inverse_scaler,
     rsde = sde.reverse(score_fn, probability_flow=True)
     return rsde.sde(x, t, condition, mask)[0]
 
-  def ode_sampler(model, condition, z=None, shape=shape):
+  def ode_sampler(model, condition, z=None, shape=shape, num_samples=None):
     """The probability flow ODE sampler with black-box ODE solver.
 
     Args:
@@ -657,6 +678,7 @@ def get_ode_sampler(sde, shape, inverse_scaler,
         real_shape = shape
       
       shape = real_shape
+      print("shape", shape)
       # Initial sample
       if z is None:
         # If not represent, sample the latent code from the prior distibution of the SDE.
@@ -680,6 +702,15 @@ def get_ode_sampler(sde, shape, inverse_scaler,
                                      rtol=rtol, atol=atol, method=method)
       nfe = solution.nfev
       x = torch.tensor(solution.y[:, -1]).reshape(shape).to(device).type(torch.float32)
+      print("solution y last shape", (torch.tensor(solution.y[:, -1])).shape)
+      print("solution.y.shape", torch.tensor(solution.y).shape)
+      print("shape", shape)
+      print("type", type(torch.tensor(solution.y))) 
+      
+      trajs = torch.tensor(solution.y).to(device).type(torch.float64)
+      trajs = trajs.reshape(shape[0], shape[1], shape[2], -1) # (bs x num_samples) x N x 3 x steps
+      trajs = trajs.reshape(num_samples, -1, trajs.shape[1], trajs.shape[2], trajs.shape[3]) # num_samples x bs x N x 3 x steps
+      trajs = trajs.permute(1, 0, 4, 2, 3) # bs x num_samples x steps x N x 3
 
       # Denoising is equivalent to running one predictor step without adding noise
       if denoise:
@@ -689,7 +720,8 @@ def get_ode_sampler(sde, shape, inverse_scaler,
 #      print("nfe", nfe)
 #      print("x", x.shape)
       
-      return nfe, x.detach().cpu().numpy()
+#      return nfe, [x]
+    return trajs, [x]
 
   return ode_sampler
 
@@ -716,7 +748,10 @@ def get_dpm_solver_sampler(sde, shape, inverse_scaler, steps=10, eps=1e-3,
   Returns:
     A sampling function that returns samples and the number of function evaluations during sampling.
   """
-  ns = NoiseScheduleSubVP('linear', continuous_beta_0=sde.beta_0, continuous_beta_1=sde.beta_1)
+  if isinstance(sde, sde_lib.VPSDE):
+      ns = NoiseScheduleVP('linear', continuous_beta_0=sde.beta_0, continuous_beta_1=sde.beta_1)
+  elif isinstance(sde, sde_lib.subVPSDE):
+      ns = NoiseScheduleSubVP('linear', continuous_beta_0=sde.beta_0, continuous_beta_1=sde.beta_1)
 
   def dpm_solver_sampler(model, condition, z=None, shape=shape):
     """ The DPM-Solver sampler funciton.
@@ -748,6 +783,7 @@ def get_dpm_solver_sampler(sde, shape, inverse_scaler, steps=10, eps=1e-3,
       mask[..., -1] = 0  # mask depth
     
       noise_pred_fn = get_noise_fn(sde, model, condition, mask, train=False, continuous=True)
+      print("thresholding", thresholding)
       dpm_solver = DPM_Solver(noise_pred_fn, ns, algorithm_type=algorithm_type, correcting_x0_fn="dynamic_thresholding" if thresholding else None)
       # Initial sample
       x = dpm_solver.sample(
@@ -763,6 +799,42 @@ def get_dpm_solver_sampler(sde, shape, inverse_scaler, steps=10, eps=1e-3,
         rtol=rtol,
         lower_order_final=False,
       )
-      return steps, inverse_scaler(x)
+      return steps, [inverse_scaler(x)]
 
   return dpm_solver_sampler
+
+def get_ddim_sampler(sde, shape, inverse_scaler, sampling_type, beta_schedule="linear", timesteps=10, num_timesteps=10,
+                    skip_type="time_uniform", device='cuda', continuous=False):
+    def ddim_sampler(model, condition,shape=shape, num_samples=None):
+        with torch.no_grad():
+            # Initial sample
+            batch_size = condition.shape[0]
+            defined_batch_size = shape[0]
+            if batch_size < defined_batch_size:
+                # e.g. the last batch
+                real_shape = (batch_size, *shape[1:])
+            else:
+                real_shape = shape
+            
+            shape = real_shape
+            
+            mask = torch.ones_like(condition)  
+            mask[..., -1] = 0  # mask depth
+            noise_pred_fn = get_noise_fn(sde, model, condition, mask, train=False, continuous=continuous)
+            
+            #print("shape", shape)
+            x = sde.prior_sampling(shape).to(device)
+            
+            skip = num_timesteps // timesteps
+            seq = range(0, num_timesteps, skip)
+            print("len seq", len(seq))
+            
+            betas = get_beta_schedule(beta_schedule, sde.beta_0 / sde.N, sde.beta_1 / sde.N, num_timesteps)
+            betas = torch.from_numpy(betas).float().to(device)
+            
+            if sampling_type == "generalized":
+                xs,xs = generalized_steps(x, seq, noise_pred_fn, betas, sde)
+            elif sampling_type == "ddpm":
+                xs,xs = ddpm_steps(x, seq, noise_pred_fn, betas, sde)
+            return inverse_scaler(xs), inverse_scaler(xs)
+    return ddim_sampler

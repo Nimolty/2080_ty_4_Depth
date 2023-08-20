@@ -20,7 +20,7 @@ import torch
 import torch.optim as optim
 import numpy as np
 from depth_c2rp.diffusion_utils import diffusion_utils as mutils
-from depth_c2rp.diffusion_utils.diffusion_sde_lib import VESDE, VPSDE
+from depth_c2rp.diffusion_utils.diffusion_sde_lib import VESDE, VPSDE, subVPSDE
 #from . import utils as mutils
 #from .sde_lib import VESDE, VPSDE
 
@@ -37,6 +37,12 @@ def get_optimizer(config, params):
 
   return optimizer
 
+def get_simple_optimizer(config, params):
+    if config["DIFF_OPTIM"]["OPTIMIZER"] == 'Adam':
+        optimizer = optim.Adam(params, lr=float(config["DIFF_OPTIM"]["LR"]))  
+    else:
+        raise NotImplementedError
+    return optimizer
 
 def optimization_manager(config):
   """Returns an optimize_fn based on `config`."""
@@ -73,7 +79,7 @@ def get_sde_loss_fn(sde, train, reduce_mean=False, continuous=True, likelihood_w
   """
   reduce_op = torch.mean if reduce_mean else lambda *args, **kwargs: 0.5 * torch.sum(*args, **kwargs)
 
-  def loss_fn(model, batch, condition, mask):
+  def loss_fn(model, batch, condition, mask,t_start=None, t_end=None, train_flag=False):
     """Compute the loss function.
 
     Args:
@@ -84,9 +90,21 @@ def get_sde_loss_fn(sde, train, reduce_mean=False, continuous=True, likelihood_w
     Returns:
       loss: A scalar that represents the average loss value across the mini-batch.
     """
-    score_fn = mutils.get_score_fn(sde, model, train=train, continuous=continuous)
+    score_fn = mutils.get_score_fn(sde, model, train=train_flag, continuous=continuous)
     # prior t0 --> sde.T
-    t = torch.rand(batch.shape[0], device=batch.device) * (sde.T - eps) + eps  # [B]
+#    print("t_start", t_start)
+#    print("t_end", t_end)
+#    print("model.training", model.training)
+    if t_start is not None and t_end is not None:
+        print("!!!!!!!")
+        print("sde.T", sde.T)
+        print("eps", eps)
+        print("t_start", t_start)
+        print("t_end", t_end)
+        t = torch.rand(batch.shape[0], device=batch.device) * (t_end - t_start) + t_start
+    else:
+        t = torch.rand(batch.shape[0], device=batch.device) * (sde.T - eps) + eps  # [B]
+    
     z = torch.randn_like(batch)  # [B, j, 3]
     mean, std = sde.marginal_prob(batch, t)
     perturbed_data = mean + std[:, None, None] * z  # [B, j, 3]
@@ -132,7 +150,7 @@ def get_smld_loss_fn(vesde, train, reduce_mean=False):
 
 def get_ddpm_loss_fn(vpsde, train, reduce_mean=True):
   """Legacy code to reproduce previous results on DDPM. Not recommended for new work."""
-  assert isinstance(vpsde, VPSDE), "DDPM training only works for VPSDEs."
+  assert (isinstance(vpsde, VPSDE) or isinstance(vpsde, subVPSDE)), "DDPM training only works for VPSDEs."
 
   reduce_op = torch.mean if reduce_mean else lambda *args, **kwargs: 0.5 * torch.sum(*args, **kwargs)
 
@@ -153,7 +171,7 @@ def get_ddpm_loss_fn(vpsde, train, reduce_mean=True):
   return loss_fn
 
 
-def get_step_fn(sde, train, reduce_mean=False, continuous=True, likelihood_weighting=False):
+def get_step_fn(sde, train, reduce_mean=False, continuous=True, likelihood_weighting=False, eps=1e-5):
   """Create a one-step training/evaluation function.
 
   Args:
@@ -168,18 +186,22 @@ def get_step_fn(sde, train, reduce_mean=False, continuous=True, likelihood_weigh
     A one-step function for training or evaluation.
   """
   if continuous:
+    print("sde loss")
     loss_fn = get_sde_loss_fn(sde, train, reduce_mean=reduce_mean,
-                              continuous=True, likelihood_weighting=likelihood_weighting)
+                              continuous=True, likelihood_weighting=likelihood_weighting, eps=eps)
   else:
     assert not likelihood_weighting, "Likelihood weighting is not supported for original SMLD/DDPM training."
     if isinstance(sde, VESDE):
       loss_fn = get_smld_loss_fn(sde, train, reduce_mean=reduce_mean)
     elif isinstance(sde, VPSDE):
+      print("ddpm!!!")
+      loss_fn = get_ddpm_loss_fn(sde, train, reduce_mean=reduce_mean)
+    elif isinstance(sde, subVPSDE):
       loss_fn = get_ddpm_loss_fn(sde, train, reduce_mean=reduce_mean)
     else:
       raise ValueError(f"Discrete training for {sde.__class__.__name__} is not recommended.")
 
-  def step_fn(state, batch, condition, mask=None):
+  def step_fn(state, batch, condition, mask=None, t_start=None, t_end=None, train_flag=False):
     """Running one step of training or evaluation.
 
     This function will undergo `jax.lax.scan` so that multiple steps can be pmapped and jit-compiled together
@@ -194,7 +216,9 @@ def get_step_fn(sde, train, reduce_mean=False, continuous=True, likelihood_weigh
       loss: The average loss value of this state.
     """
     model = state['model']
-    if train:
+    #print("model.training", model.training)
+    #print("train_flag", train_flag)
+    if train_flag:
 #      optimizer = state['optimizer']
 #      optimizer.zero_grad()
 #      loss = loss_fn(model, batch, condition, mask)
@@ -203,7 +227,7 @@ def get_step_fn(sde, train, reduce_mean=False, continuous=True, likelihood_weigh
 #      state['step'] += 1
 #      state['ema'].update(model.parameters())
       
-      loss = loss_fn(model, batch, condition, mask)
+      loss = loss_fn(model, batch, condition, mask, train_flag=train_flag)
       
     else:
       with torch.no_grad():
@@ -211,7 +235,7 @@ def get_step_fn(sde, train, reduce_mean=False, continuous=True, likelihood_weigh
         ema = state['ema']
         ema.store(model.parameters())
         ema.copy_to(model.parameters())
-        loss = loss_fn(model, batch, condition, mask)
+        loss = loss_fn(model, batch, condition, mask,t_start, t_end, train_flag=train_flag)
         ema.restore(model.parameters())
 
     return loss

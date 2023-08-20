@@ -220,7 +220,7 @@ def main(cfg):
         train_sampler.set_epoch(epoch)
         model.train()
         for batch_idx, batch in enumerate(tqdm(training_loader)):
-            torch.cuda.synchronize()
+            
             
             joints_2d = batch["joints_2D_uv"].float().to(device, non_blocking=True)
             joints_3d = batch["joints_3D_Z"].float().to(device, non_blocking=True)
