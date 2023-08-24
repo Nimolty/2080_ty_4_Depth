@@ -33,7 +33,7 @@ from depth_c2rp.utils.spdh_utils import reduce_mean, init_spdh_model, compute_kp
 from depth_c2rp.spdh_optimizers import init_optimizer
 from depth_c2rp.utils.spdh_visualize import get_blended_images, get_joint_3d_pred, log_and_visualize_single
 from depth_c2rp.utils.spdh_network_utils import SequentialDistributedSampler, distributed_concat
-from depth_c2rp.utils.analysis import flat_add_from_pose, add_metrics, add_from_pose, print_to_screen_and_file, batch_add_from_pose, batch_mAP_from_pose, batch_acc_from_joint_angles, batch_outlier_removal_pose
+from depth_c2rp.utils.analysis import flat_add_from_pose, add_metrics, add_from_pose, print_to_screen_and_file, batch_add_from_pose, batch_mAP_from_pose, batch_acc_from_joint_angles, batch_outlier_removal_pose, batch_pck_from_pose, pck_metrics
 
 # voxel
 from depth_c2rp.datasets.datasets_voxel_ours import Voxel_dataset
@@ -260,6 +260,10 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
     time_list = []
     time_list2 = []
     meta_json = []
+    ass_add_per = []
+    uv_pck_list = []
+    uv_list = []
+    angles_acc_per = []
 
     with torch.no_grad():
         for mode, value in split.items():
@@ -285,6 +289,7 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                 depth_img_vis = batch["depthvis"].detach().cpu().numpy()
                 depth_path = batch["depth_path"]
                 batch_json["depth_path"] = depth_path[0]
+                uv_gt = batch["joints_2D_uv"].float().to(device)
 #                cv2.imwrite(f"/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/depth_c2rp/datasets/imgs_kinect/{batch_idx}.png", depth_img_vis[0])
 #                np.savetxt(f"/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/depth_c2rp/datasets/imgs_kinect/{batch_idx}.txt", xyz_img[0].reshape(-1, 3)) 
                 
@@ -295,9 +300,14 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                 heatmap_pred = (F.interpolate(heatmap_pred, (h, w), mode='bicubic', align_corners=False) + 1) / 2.
                 _, c, _, _ = heatmap_pred.shape
                 
-                uv_pred = softargmax_uv(heatmap_pred[:, :c//2, :, :])          
+                uv_pred = softargmax_uv(heatmap_pred[:, :c//2, :, :])
+                print("input_tensor.shape", input_tensor.shape)          
                 batch["joints_2D_uv"] = uv_pred
                 
+                this_uv_norm = torch.linalg.norm((uv_pred - uv_gt) / 0.6, dim=-1)
+                uv_list.append(this_uv_norm.detach().cpu().numpy().tolist())
+                uv_pck = batch_pck_from_pose(uv_gt.detach().cpu().numpy() / 0.6, uv_pred.detach().cpu().numpy() / 0.6)
+                uv_pck_list.append(uv_pck)
                 
                 loss_dict, data_dict = model(batch, "test", epoch-1)
                 
@@ -361,14 +371,31 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                 ass_mAP_mean = batch_mAP_from_pose(joints_pred, joints_gt,thresholds) # 
                 ass_mAP.append(ass_mAP_mean)
                 
+                this_ass_add_per = torch.linalg.norm((joints_3d_pred - joints_3d_gt), dim=-1)
+                ass_add_per.append(this_ass_add_per.detach().cpu().numpy().tolist())
+                
                 angles_acc_mean = batch_acc_from_joint_angles(joints_angle_pred.detach().cpu().numpy(), joints_1d_gt.detach().cpu().numpy()[:, :, None], acc_thresholds)
                 angles_acc.append(angles_acc_mean)
+                
+                this_angles_acc_per = torch.linalg.norm((joints_angle_pred - joints_1d_gt[..., None]), dim=-1)
+                angles_acc_per.append(this_angles_acc_per.detach().cpu().numpy().tolist())
                 
             torch.distributed.barrier()
             angles_acc = np.concatenate(angles_acc, axis=0)
             ass_mAP = np.concatenate(ass_mAP, axis=0)
             kps_mAP = np.concatenate(kps_mAP, axis=0)
             acc = np.array(acc)
+            
+            uv_pck_list = np.concatenate(uv_pck_list, axis=0) 
+            uv_pck_list = distributed_concat(torch.from_numpy(uv_pck_list).to(device), len(sampler.dataset))
+            uv_list = np.concatenate(uv_list, axis=0) 
+            uv_list = distributed_concat(torch.from_numpy(uv_list).to(device), len(sampler.dataset))
+            
+            
+            ass_add_per = np.concatenate(ass_add_per)
+            angles_acc_per = np.concatenate(angles_acc_per)
+            ass_add_per = distributed_concat(torch.from_numpy(ass_add_per).to(device), len(sampler.dataset))
+            angles_acc_per = distributed_concat(torch.from_numpy(angles_acc_per).to(device), len(sampler.dataset))
             #print(angles_acc.shape)
             
             ass_add = distributed_concat(torch.from_numpy(np.array(ass_add)).to(device), len(sampler.dataset))
@@ -394,6 +421,13 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
             angles_acc = angles_acc.detach().cpu().numpy().tolist()
             kps_add = kps_add.detach().cpu().numpy().tolist()
             kps_mAP = kps_mAP.detach().cpu().numpy().tolist()
+            ass_add_per = ass_add_per.detach().cpu().numpy().tolist()
+            angles_acc_per = angles_acc_per.detach().cpu().numpy().tolist()
+            
+            uv_pck_list = uv_pck_list.detach().cpu().numpy()
+            uv_list = uv_list.detach().cpu().numpy()
+            
+            pck_results = pck_metrics(uv_pck_list)
             
             angles_results = np.round(np.mean(angles_acc,axis=0)*100, 2)
             angles_dict = dict()
@@ -426,6 +460,9 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                     )
                     print_to_screen_and_file(f, "")
                     
+                    print_to_screen_and_file(
+                        f, f" uv_kps_pck : {np.mean(uv_list, axis=0)}")
+                    
                     # print add
                     print_to_screen_and_file(
                         f, " ADD AUC: {:.5f}".format(ass_add_results["add_auc"])
@@ -443,6 +480,13 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                     print_to_screen_and_file(
                         f, " ADD  Std Dev: {:.5f}".format(ass_add_results["add_std"]))
                     print_to_screen_and_file(f, "")
+                    
+                    print_to_screen_and_file(
+                        f, f" ass_add_per : {np.mean(ass_add_per, axis=0)}")
+                        
+                    print_to_screen_and_file(
+                        f, f" angles_acc_per : {np.mean(angles_acc_per, axis=0)}")
+                    
                     
                     # print mAP
                     for thresh, avg_map in zip(thresholds, ass_mAP_results):
@@ -496,7 +540,18 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                         f, " ADD  Std Dev: {:.5f}".format(kps_add_results["add_std"]))
                     print_to_screen_and_file(f, "")
                 
-
+                    print_to_screen_and_file(
+                    f, " PCK AUC: {:.5f}".format(pck_results["l2_error_auc"])
+                    )
+                    print_to_screen_and_file(
+                    f, " PCK MEAN: {:.5f}".format(pck_results["l2_error_mean_px"])
+                    )
+                    print_to_screen_and_file(
+                    f, " PCK MEDIAN: {:.5f}".format(pck_results["l2_error_median_px"])
+                    )
+                    print_to_screen_and_file(
+                    f, " PCK STD: {:.5f}".format(pck_results["l2_error_std_px"])
+                    )
 
     
     

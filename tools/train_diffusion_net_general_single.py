@@ -104,6 +104,7 @@ def main(cfg):
                                      prob_large_cond_uv=train_cfg["PROB_LARGE_COND_UV"],
                                      cond_norm=train_cfg["COND_NORM"],
                                      kps_14_name=train_cfg["KPS_14_NAME"],
+                                     rel=train_cfg.get("REL", False),
                                      )
     training_dataset.load_data()                           
     training_dataset.train()
@@ -148,6 +149,7 @@ def main(cfg):
                                      prob_large_cond_uv=train_cfg["PROB_LARGE_COND_UV"],
                                      cond_norm=train_cfg["COND_NORM"],
                                      kps_14_name=train_cfg["KPS_14_NAME"],
+                                     rel=train_cfg.get("REL", False),
                                      )
     real_2_dataset = copy.copy(toy_dataset)
     real_2_dataset.real_dataset_dir = Path("/DATA/disk1/hyperplane/Depth_C2RP/Data/Real_Test_0613/2_D415_front_1/")
@@ -302,6 +304,9 @@ def main(cfg):
             joints_3d = batch["joints_3D_Z"].float().to(device, non_blocking=True)
             joints_7 = batch["joints_7"].float().to(device, non_blocking=True)
             
+            if train_cfg.get("REL", False):
+                joints_3d = batch["joints_3D_Z_rel"].float().to(device, non_blocking=True)
+            
             if cfg["DIFF_MODEL"]["NUM_ANGLES"] != 7:
                 joints_7 = batch["joints_3D_Z_rob"].float().to(device, non_blocking=True)
             
@@ -375,6 +380,7 @@ def main(cfg):
                         curr_loss = 0.0
                         joints_2d = batch["joints_2D_uv"].float().to(device, non_blocking=True)
                         joints_3d = batch["joints_3D_Z"].float().to(device, non_blocking=True)
+                        
                         joints_7 = batch["joints_7"].float().to(device, non_blocking=True)
                         if cfg["DIFF_MODEL"]["NUM_ANGLES"] != 7:
                             joints_7 = batch["joints_3D_Z_rob"].float().to(device, non_blocking=True)
@@ -418,6 +424,10 @@ def main(cfg):
                         joints_3d_pred_repeat = joints_3d_pred_repeat.reshape(num_samples, bs, -1, 3) 
                         joints_3d_pred_repeat = joints_3d_pred_repeat.permute(1, 0, 2, 3) # bs x num_samples x N x 3
                         joints_3d_pred = torch.mean(joints_3d_pred_repeat, dim=1)
+                        
+                        if train_cfg.get("REL", False):
+                            joints_3d_pred[:, 1:, :] += joints_3d_pred[:, 0:1, :]
+                        
                         this_add = batch_add_from_pose(joints_3d_pred.detach().cpu().numpy(), joints_3d.detach().cpu().numpy())
                         val_add = val_add + this_add 
                         
@@ -425,6 +435,9 @@ def main(cfg):
                         joints_3d_pred_repeat_q = joints_3d_pred_repeat_q.reshape(num_samples, bs, -1, 3) 
                         joints_3d_pred_repeat_q = joints_3d_pred_repeat_q.permute(1, 0, 2, 3) # bs x num_samples x N x 3
                         joints_3d_pred_q = torch.mean(joints_3d_pred_repeat_q, dim=1)
+                        
+                        if train_cfg.get("REL", False):
+                            joints_3d_pred_q[:, 1:, :] += joints_3d_pred_q[:, 0:1, :]
                         this_add_q = batch_add_from_pose(joints_3d_pred_q.detach().cpu().numpy(), joints_3d.detach().cpu().numpy())
                         val_add_q = val_add_q + this_add_q 
                         #print("results", results.shape)

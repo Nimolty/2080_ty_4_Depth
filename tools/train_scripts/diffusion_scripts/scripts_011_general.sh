@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=3 python /DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/tools/train_diffusion_net_general_single.py --exp_id general_11 --cfg "/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/configs/diffusion_configs/train_011_general_net.yaml" 

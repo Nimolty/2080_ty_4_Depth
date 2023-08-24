@@ -18,7 +18,7 @@ DATASET:
   TYPE          : D
   NUM_JOINTS    : 14
   INPUT_RESOLUTION : [384, 384] # W x H
-  OUTPUT_RESOLUTION : [192, 192]
+  OUTPUT_RESOLUTION : [384, 384]
   RAW_RESOLUTION : [640, 480] # W x H 
   NORM_TYPE     : min_max
   REF_FRAME     : left_hand
@@ -29,8 +29,8 @@ DATASET:
   AUG           : true
   AUG_TYPE      : 3d  
 
-DIFF_MODEL: 
-  MODEL_NAME    : general    
+DIFF_MODEL:        
+  MODEL_NAME    : general  
   NUM_ANGLES    : 14                                                                     
   SEED          : 317                                # name of the model you are using
   NUM_JOINTS    : 14
@@ -152,7 +152,9 @@ LOSS:
   pos_coeff       : 100.0
   prob_coeff      : 0.5
   
-
+RTM:
+  MODEL_NAME : rtmpose-x
+  
 
 
 
