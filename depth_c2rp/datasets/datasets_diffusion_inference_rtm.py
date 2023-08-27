@@ -30,6 +30,7 @@ def init_worker(worker_id):
 class Diff_dataset(Dataset):
     def __init__(self, train_dataset_dir: Path, val_dataset_dir: Path, real_dataset_dir: Path, joint_names: list, run: list, init_mode: str = 'train', img_type: str = 'D',
                  raw_img_size: tuple = (640, 360), input_img_size: tuple = (384, 384), output_img_size : tuple = (384, 384), sigma: int = 4., norm_type: str = 'mean_std', network_input: str = 'D', network_output: str = 'H', network_task: str = '3d_RPE', depth_range: tuple = (500, 3380, 15), depth_range_type: str = 'normal', aug_type: str = '3d', aug_mode: bool = True, noise: bool = False, demo: bool = False, load_mask: bool = False, mask_dict : dict = {}, hole_filling : bool = True, aug_intrin : bool = False, intrin_params : dict = {}, change_intrinsic : bool = False, cond_norm : bool = False, mean : list=[], std : list = [], aug_mask: bool = False, aug_mask_ed : bool = False, whole_flag: bool = False, hm_mode: str = "spdh_intno", kps_14_name: str="42", simcc_flag: bool=True, mid_epoch: int=35,
+                 rel: bool=False,
                  ):
         """Load Baxter robot synthetic dataset
 
@@ -115,6 +116,7 @@ class Diff_dataset(Dataset):
                     use_dark=False)
         self.simcc_label = SimCCLabel(**codec)
         self.data = self.load_data()
+        self.rel = rel
         
 
     def __len__(self):
@@ -195,11 +197,16 @@ class Diff_dataset(Dataset):
         
         rgb_img = rgb_img[bbox[0] : bbox[2], bbox[1] : bbox[3], :] # H x W x 3
         mask_img = mask_img[bbox[0] : bbox[2], bbox[1] : bbox[3], :] # H x W x 1
+        
+        #rgb_img *= (mask_img > 0.0)
+        
         joints_2D_crop = np.zeros_like(joints_2D)
         joints_2D_crop[:, 0] = joints_2D[:, 0] - bbox[1]
         joints_2D_crop[:, 1] = joints_2D[:, 1] - bbox[0]
         
         crop_h, crop_w = rgb_img.shape[0], rgb_img.shape[1]
+        #print("shape", rgb_img.shape)
+        #print("intrinsic", intrinsic)
         c = np.array([crop_w / 2., crop_h / 2.], dtype=np.float64) # (crop_w/2, crop_h/2)
         s = max(crop_h, crop_w) * 1.0
         rot = 0.0
@@ -244,6 +251,9 @@ class Diff_dataset(Dataset):
         R2C_Pose_after_aug[:3, :3] = R2C_Mat_after_aug
         R2C_Pose_after_aug[:3, 3] = R2C_Trans_after_aug 
         
+        joints_3D_Z_rob = (joints_3D_Z - R2C_Pose_after_aug[:3, 3:].T) @ R2C_Pose_after_aug[:3, :3]
+
+        
         
         if self.cond_norm:
             #noise = 3.0 * np.random.randn(joints_2D.shape[0], joints_2D.shape[1])
@@ -257,6 +267,7 @@ class Diff_dataset(Dataset):
         output = {
             'joints_3D_Z': joints_3D_Z.astype(np.float64),
             "joints_3D_kps" : torch.from_numpy(np.array(sample["joints_kps"]))[[0,2,3,4,6,7,8]],
+            "joints_3D_Z_rob": joints_3D_Z_rob,
             "joints_7" : torch.from_numpy(np.array(sample["joints_8"])[:7]).float(),
             "R2C_Pose" : R2C_Pose_after_aug[:3, :],
             "rgb_path" : sample['rgb_file'],
@@ -280,6 +291,11 @@ class Diff_dataset(Dataset):
         output["keypoint_x_labels"] = keypoint_x_labels
         output["keypoint_y_labels"] = keypoint_y_labels
         output["keypoint_weights"] = keypoint_weights
+
+        if self.rel:
+            joints_3D_Z_rel = joints_3D_Z.copy()
+            joints_3D_Z_rel[1:, :] -= joints_3D_Z_rel[0:1, :]
+            output["joints_3D_Z_rel"] = joints_3D_Z_rel
         
         return output
 
@@ -326,7 +342,7 @@ class Diff_dataset(Dataset):
                     meta_files = glob.glob(os.path.join(dataset_dir, "*", "*meta.json"))
                 meta_files.sort()
                 
-                for meta_file in tqdm(meta_files[:10000], f"Loading {split} ..."):
+                for meta_file in tqdm(meta_files[:1000], f"Loading {split} ..."):
                     rgb_file, depth_pf_file, depth_file = 0.0, 0.0, 0.0
                     
                     

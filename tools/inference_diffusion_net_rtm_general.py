@@ -95,25 +95,26 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                                      cond_norm=train_cfg["COND_NORM"],
                                      mean=model_cfg["MEAN"],
                                      std=model_cfg["STD"],
+                                     rel=train_cfg.get("REL", False),
                                      )
                                     
     training_dataset.train()
     train_sampler = DistributedSampler(training_dataset)
     training_loader = DataLoader(training_dataset, sampler=train_sampler, batch_size=eval_cfg["BATCH_SIZE"],
-                                  num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=True) 
+                                  num_workers=4, pin_memory=True, drop_last=True) 
     
     
     val_dataset = copy.copy(training_dataset)  
     val_dataset.eval()    
     val_sampler = DistributedSampler(val_dataset)
     val_loader = DataLoader(val_dataset, sampler=val_sampler, batch_size=eval_cfg["BATCH_SIZE"],
-                                  num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=False)
+                                  num_workers=4, pin_memory=True, drop_last=False)
     
     real_dataset = copy.copy(training_dataset)
     real_dataset.real()
     real_sampler = DistributedSampler(real_dataset)
     real_loader = DataLoader(real_dataset, sampler=real_sampler, batch_size=eval_cfg["BATCH_SIZE"],
-                                  num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=False)
+                                  num_workers=4, pin_memory=True, drop_last=False)
     
     # Build Recording and Saving Path
     if dist.get_rank() != 0:
@@ -281,6 +282,7 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
     uv_pck_list = []
     uv_kps_pck_list = []
     depth_path_lst = []
+    ass_add_per = []
     info_path = os.path.join(save_path, "INFERENCE_LOGS", str(start_epoch).zfill(5))
     exists_or_mkdir(info_path)
 
@@ -399,6 +401,8 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                 joints_3d_pred_repeat = joints_3d_pred_repeat.permute(1, 0, 2, 3) # bs x num_samples x N x 3
                 #print("joints_3d_pred_repeat", joints_3d_pred_repeat[0])
                 joints_3d_pred = torch.mean(joints_3d_pred_repeat, dim=1)
+                if train_cfg.get("REL", False):
+                    joints_3d_pred[:, 1:, :] += joints_3d_pred[:, 0:1, :]
                 
                 joints_3d_pred_repeat = joints_3d_pred_repeat.permute(0, 2, 1, 3) # bs x N x num_samples x 3
 
@@ -448,7 +452,8 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                 #ass_mAP.append(ass_mAP_mean)
                 ass_add_mean = batch_add_from_pose(joints_3d_pred.detach().cpu().numpy(), joints_3d_gt.detach().cpu().numpy())
                 ass_add = ass_add + ass_add_mean
-                
+                this_ass_add_per = torch.linalg.norm((joints_3d_pred - joints_3d_gt), dim=-1)
+                ass_add_per.append(this_ass_add_per.detach().cpu().numpy().tolist())
                 ass_mAP_mean = batch_mAP_from_pose(joints_3d_pred.detach().cpu().numpy(), joints_3d_gt.detach().cpu().numpy(), thresholds) # 
                 ass_mAP.append(ass_mAP_mean)
                 
@@ -463,6 +468,9 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
             angles_acc = np.concatenate(angles_acc, axis=0)
             ass_mAP = np.concatenate(ass_mAP, axis=0)
             kps_mAP = np.concatenate(kps_mAP, axis=0)
+
+            ass_add_per = np.concatenate(ass_add_per)
+            ass_add_per = distributed_concat(torch.from_numpy(ass_add_per).to(device), len(sampler.dataset))
             
             
 #            print(uv_pred_list)
@@ -501,6 +509,7 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
             kps_add = kps_add.detach().cpu().numpy().tolist()
             kps_mAP = kps_mAP.detach().cpu().numpy().tolist()
             pose_gt_gather = pose_gt_gather.detach().cpu().numpy().tolist()
+            ass_add_per = ass_add_per.detach().cpu().numpy().tolist()
             if pred_2d_flag:
                 uv_pred_list = uv_pred_list.detach().cpu().numpy()
                 uv_gt_list = uv_gt_list.detach().cpu().numpy()
@@ -586,6 +595,9 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                     
                     print_to_screen_and_file(
                         f, f" uv_kps_pck : {np.mean(uv_kps_pck_list, axis=0)}")
+
+                    print_to_screen_and_file(
+                        f, f" ass_add_per : {np.mean(ass_add_per, axis=0)}")
                     
                     
                     # print mAP

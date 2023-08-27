@@ -288,3 +288,20 @@ def to_flattened_numpy(x):
 def from_flattened_numpy(x, shape):
   """Form a torch tensor with the given `shape` from a flattened numpy array `x`."""
   return torch.from_numpy(x.reshape(shape))
+
+
+def draw_heatmap_simcc(joints_2D_output_pred, output_img_size, device, sigma_pixel):
+    sigma_mm = 50
+    bs, n_kps = joints_2D_output_pred.shape[:2]
+    #joints_2D_output_pred_np = joints_2D_output_pred.detach().cpu().numpy()
+    heatmap_pred = np.zeros((bs, n_kps, output_img_size[1], output_img_size[0]))
+    for b_ in range(bs):
+        x, y = np.meshgrid(np.arange(output_img_size[0]), np.arange(output_img_size[1]))
+        for n, p in enumerate(joints_2D_output_pred[b_]):
+            dst = np.sqrt((x - p[0]) ** 2 + (y - p[1]) ** 2)
+            #sigma_pixel = 15 
+            mu = 0.0
+            heatmap_pred[b_][n] = np.exp(-((dst - mu) ** 2 / (2.0 * sigma_pixel ** 2)))
+    
+    heatmap_pred = torch.from_numpy(heatmap_pred).float().to(device)
+    return heatmap_pred

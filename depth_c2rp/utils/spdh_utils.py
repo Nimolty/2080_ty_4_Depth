@@ -27,7 +27,7 @@ import torch.distributed as dist
 from matplotlib import cm
 from torchsummary import summary
 
-
+from pyrr import Quaternion
 
 def depthmap2normals(depthmap, normalize=True, keep_dims=True):
     """
@@ -1737,7 +1737,169 @@ def affine_transform_and_clip(pts, t, width, height, raw_width, raw_height,mode=
             out.append([0,0])
     return np.array(out)
 
+def solve_pnp(
+    canonical_points,
+    projections,
+    camera_K,
+    method=cv2.SOLVEPNP_EPNP,
+    refinement=True,
+    dist_coeffs=np.array([]),
+):
 
+    n_canonial_points = len(canonical_points)
+    n_projections = len(projections)
+    assert (
+        n_canonial_points == n_projections
+    ), "Expected canonical_points and projections to have the same length, but they are length {} and {}.".format(
+        n_canonial_points, n_projections
+    )
+
+    # Process points to remove any NaNs
+    canonical_points_proc = []
+    projections_proc = []
+    for canon_pt, proj in zip(canonical_points, projections):
+
+        if (
+            canon_pt is None
+            or len(canon_pt) == 0
+            or canon_pt[0] is None
+            or canon_pt[1] is None
+            or proj is None
+            or len(proj) == 0
+            or proj[0] is None
+            or proj[1] is None
+        ):
+            continue
+
+        canonical_points_proc.append(canon_pt)
+        projections_proc.append(proj)
+
+    # Return if no valid points
+    if len(canonical_points_proc) == 0:
+        return False, None, None
+
+    canonical_points_proc = np.array(canonical_points_proc)
+    projections_proc = np.array(projections_proc)
+    
+    #print("canonical", canonical_points_proc.shape)
+    #print("camera_K", camera_K.shape)
+    #print("projections_proc", projections_proc.shape)
+
+    # Use cv2's PNP solver
+    try:
+        pnp_retval, rvec, tvec = cv2.solvePnP(
+            canonical_points_proc.reshape(canonical_points_proc.shape[0], 1, 3),
+            projections_proc.reshape(projections_proc.shape[0], 1, 2),
+            camera_K,
+            dist_coeffs,
+            flags=method,
+        )
+
+        if refinement:
+            pnp_retval, rvec, tvec = cv2.solvePnP(
+                canonical_points_proc.reshape(canonical_points_proc.shape[0], 1, 3),
+                projections_proc.reshape(projections_proc.shape[0], 1, 2),
+                camera_K,
+                dist_coeffs,
+                flags=cv2.SOLVEPNP_ITERATIVE,
+                useExtrinsicGuess=True,
+                rvec=rvec,
+                tvec=tvec,
+            )
+        #print("pnp_retval", pnp_retval)
+        #print("rvec", rvec)
+        #print("tvec", tvec)
+        translation = tvec[:, 0]
+        quaternion = convert_rvec_to_quaternion(rvec[:, 0])
+
+    except:
+        pnp_retval = False
+        translation = None
+        quaternion = None
+
+    return pnp_retval, translation, quaternion
+    
+def convert_rvec_to_quaternion(rvec):
+    """Convert rvec (which is log quaternion) to quaternion"""
+    theta = np.sqrt(
+        rvec[0] * rvec[0] + rvec[1] * rvec[1] + rvec[2] * rvec[2]
+    )  # in radians
+    raxis = [rvec[0] / theta, rvec[1] / theta, rvec[2] / theta]
+
+    # pyrr's Quaternion (order is XYZW), https://pyrr.readthedocs.io/en/latest/oo_api_quaternion.html
+    quaternion = Quaternion.from_axis_rotation(raxis, theta)
+    quaternion.normalize()
+    return quaternion
+
+
+
+def solve_pnp_ransac(
+    canonical_points,
+    projections,
+    camera_K,
+    method=cv2.SOLVEPNP_EPNP,
+    inlier_thresh_px=5.0,  # this is the threshold for each point to be considered an inlier
+    dist_coeffs=np.array([]),
+):
+
+    n_canonial_points = len(canonical_points)
+    n_projections = len(projections)
+    assert (
+        n_canonial_points == n_projections
+    ), "Expected canonical_points and projections to have the same length, but they are length {} and {}.".format(
+        n_canonial_points, n_projections
+    )
+
+    # Process points to remove any NaNs
+    canonical_points_proc = []
+    projections_proc = []
+    for canon_pt, proj in zip(canonical_points, projections):
+
+        if (
+            canon_pt is None
+            or len(canon_pt) == 0
+            or canon_pt[0] is None
+            or canon_pt[1] is None
+            or proj is None
+            or len(proj) == 0
+            or proj[0] is None
+            or proj[1] is None
+        ):
+            continue
+
+        canonical_points_proc.append(canon_pt)
+        projections_proc.append(proj)
+
+    # Return if no valid points
+    if len(canonical_points_proc) == 0:
+        print("!!!")
+        return False, None, None, None
+
+    canonical_points_proc = np.array(canonical_points_proc)
+    projections_proc = np.array(projections_proc)
+    #print("canonical", canonical_points_proc)
+
+    # Use cv2's PNP solver
+    try:
+        pnp_retval, rvec, tvec, inliers = cv2.solvePnPRansac(
+            canonical_points_proc.reshape(canonical_points_proc.shape[0], 1, 3),
+            projections_proc.reshape(projections_proc.shape[0], 1, 2),
+            camera_K,
+            dist_coeffs,
+            reprojectionError=inlier_thresh_px,
+            flags=method,
+        )
+
+        translation = tvec[:, 0]
+        quaternion = convert_rvec_to_quaternion(rvec[:, 0])
+
+    except:
+        pnp_retval = False
+        translation = None
+        quaternion = None
+        inliers = None
+
+    return pnp_retval, translation, quaternion, inliers
 
 if __name__ == "__main__":
     device = torch.device("cpu")

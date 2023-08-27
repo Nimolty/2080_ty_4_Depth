@@ -95,7 +95,7 @@ class build_simple_network(nn.Module):
         all_dof_pred = joints_angle_pred[:, :, None] # B x 7 x 1
         
         if joints_1d_gt is not None and gt_angle_flag: 
-            print("gt")
+            #print("gt")
             all_dof_pred = joints_1d_gt   
         joints_3d_rob_pred = compute_3n_loss_42_rob(all_dof_pred, joints_3d_pred.device)
         

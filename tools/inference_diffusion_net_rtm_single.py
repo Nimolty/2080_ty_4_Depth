@@ -256,7 +256,7 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
             loader = value[0]
             
             for batch_idx, batch in enumerate(tqdm(loader)):
-                #if batch_idx >= 50:
+                # if batch_idx >= 50:
                 #    break
                 batch_json = {}
                 curr_loss = 0.0      
@@ -319,19 +319,24 @@ def main(cfg, mAP_thresh=[0.02, 0.11, 0.01], add_thresh=0.06,angles_thresh=[2.5,
                 joints_kps_3d_gt_repeat = joints_kps_3d_gt.repeat(num_samples, 1, 1)                                        
     
                 ema.copy_to(model.parameters())
+                t3 = time.time()
                 if batch_idx == 0:
                     trajs, results = model.sampling_fn(
                                 model.model,
                                 condition=joints_2d_repeat,
-                                num_samples=num_samples
+                                num_samples=num_samples,
+                                track_idx = batch_idx
                             )  # [b ,j ,3]    
                 else: 
                     trajs, results = model.sampling_fn(
                                 model.model,
                                 condition=joints_2d_repeat,
                                 num_samples=num_samples,
-                                z=joints_3d_pred_prev
+                                z=joints_3d_pred_prev,
+                                track_idx = batch_idx
                             ) 
+                t4 = time.time()
+                #print("single pass", t4 - t3)
 #                trajs, results = model.sampling_fn(
 #                                model.model,
 #                                condition=joints_2d_repeat,

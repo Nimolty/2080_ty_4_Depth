@@ -35,7 +35,7 @@ class Diff_dataset(Dataset):
                  raw_img_size: tuple = (640, 360), input_img_size: tuple = (384, 216), sigma: int = 4., norm_type: str = 'mean_std',
                  network_input: str = 'D', network_output: str = 'H', network_task: str = '3d_RPE',
                  depth_range: tuple = (500, 3380, 15), depth_range_type: str = 'normal', aug_type: str = '3d',
-                 aug_mode: bool = True, noise: bool = False, demo: bool = False, load_mask: bool = False, mask_dict : dict = {}, unnorm_depth: bool=False, cx_delta: int = 0, cy_delta: int = 0, change_intrinsic: bool=False, uv_input : bool = False, intrin_aug_params : dict = {}, cond_uv_std : float=0.0, large_cond_uv_std : float=0.0, prob_large_cond_uv : float=0.0, cond_norm : bool = False, kps_14_name: str="42"):
+                 aug_mode: bool = True, noise: bool = False, demo: bool = False, load_mask: bool = False, mask_dict : dict = {}, unnorm_depth: bool=False, cx_delta: int = 0, cy_delta: int = 0, change_intrinsic: bool=False, uv_input : bool = False, intrin_aug_params : dict = {}, cond_uv_std : float=0.0, large_cond_uv_std : float=0.0, prob_large_cond_uv : float=0.0, cond_norm : bool = False, kps_14_name: str="42", rel: bool=False):
         assert init_mode in ['train', 'test']
 
         self.train_dataset_dir = Path(train_dataset_dir)
@@ -70,6 +70,7 @@ class Diff_dataset(Dataset):
         self.large_cond_uv_std = large_cond_uv_std
         self.cond_norm = cond_norm
         self.kps_14_name = kps_14_name
+        self.rel = rel
         #self.data = self.load_data()
 
     def __len__(self):
@@ -338,7 +339,9 @@ class Diff_dataset(Dataset):
             input_joints_2D[:, 0] = (joints_2D[:, 0] - cx) / fx
             input_joints_2D[:, 1] = (joints_2D[:, 1] - cy) / fy
         else:
-            input_joints_2D = np.array(joints_2D) / self.input_img_size[0], # map to [0, 1]
+            input_joints_2D = np.array(joints_2D).copy() / self.raw_img_size[0] # map to [0, 1]
+            
+            
 
 
         #print("final 2d", joints_2D)
@@ -391,6 +394,11 @@ class Diff_dataset(Dataset):
         
         if self.load_mask:
             output["mask"] = torch.from_numpy(mask_file_res).float()
+        
+        if self.rel:
+            joints_3D_Z_rel = joints_3D_Z.copy()
+            joints_3D_Z_rel[1:, :] -= joints_3D_Z_rel[0:1, :]
+            output["joints_3D_Z_rel"] = joints_3D_Z_rel
         
         #print("t4 - t3", t4 - t3)
 

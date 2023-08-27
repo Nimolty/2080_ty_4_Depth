@@ -21,12 +21,25 @@ import json
 from tqdm import tqdm
 
 from depth_c2rp.datasets.datasets_voxel_ours import Voxel_dataset
-from depth_c2rp.voxel_utils.voxel_network import build_model, build_voxel_refine_network
+#from depth_c2rp.voxel_utils.voxel_network import build_model, build_voxel_refine_network, build_voxel_network
 from torch_scatter import scatter, scatter_softmax, scatter_max, scatter_log_softmax
 from depth_c2rp.models.backbones.dream_hourglass import ResnetSimpleWoff
 from depth_c2rp.voxel_utils.refine_batch_utils import get_pred_refine, compute_refine_loss
 from depth_c2rp.configs.config import update_config
 
+import Pointnet2_master.pointnet2.pointnet2_utils as ptn_utils
+
+def adapt_lr(optimizer, cur_iters, max_iters, base_lr):
+    warmup_iters = 3000
+    warmup_ratio = 1e-06
+    if cur_iters <= warmup_iters:
+        k = (1 - cur_iters / warmup_iters) * (1 - warmup_ratio)
+        lr_ = base_lr * (1 - k)
+    else:
+        lr_ = base_lr * (1.0 - (cur_iters - 1) / max_iters) ** 1.0
+    
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr_
 
 def DepthToPointCloud(depthImage, f):
     H, W, _ = depthImage.shape
@@ -66,25 +79,25 @@ def sample_valid_points(valid_mask, sample_num, block_x=8, block_y=8, data_dict=
         eid = bid_interval[i+1]
         cur_cnt = eid - sid
         if cur_cnt < sample_num:
-            if data_dict is not None:
-                print(data_dict["path"])
-            print("bid_interval", bid_interval)
-            print("sample_num", sample_num)
-            print("cur_cnt", cur_cnt)
-            print("eid", eid)
-            print("sid", sid)
+#            if data_dict is not None:
+#                print(data_dict["path"])
+#            print("bid_interval", bid_interval)
+#            print("sample_num", sample_num)
+#            print("cur_cnt", cur_cnt)
+#            print("eid", eid)
+#            print("sid", sid)
             mult = np.ceil(float(sample_num)/float(cur_cnt)) #- 1
-            print("mult", mult)
+#            print("mult", mult)
             cur_points_idx = torch.arange(sid,eid).long().to(valid_mask.device)
-            print("cur_pints_idx", cur_points_idx)
+#            print("cur_pints_idx", cur_points_idx)
             rand_pool = cur_points_idx.repeat(int(mult))
-            print("rand_pool", rand_pool)
+#            print("rand_pool", rand_pool)
             nextra = sample_num - cur_cnt
-            print("nextra", nextra)
+#            print("nextra", nextra)
             rand_pool_idx = np.random.choice(rand_pool.shape[0], nextra.item(), replace=False)
-            print("rand pool idx", rand_pool_idx)
+#            print("rand pool idx", rand_pool_idx)
             extra_idx = rand_pool[rand_pool_idx]
-            print("extra_idx", extra_idx)
+#            print("extra_idx", extra_idx)
             sample_idx = torch.cat([cur_points_idx, extra_idx], dim=0)
         else:
             sample_step = cur_cnt // sample_num
@@ -103,7 +116,7 @@ def sample_valid_points(valid_mask, sample_num, block_x=8, block_y=8, data_dict=
                         + sampled_valid_idx[:,2] * block_x + sampled_valid_idx[:,4]
     sampled_bid = sampled_valid_idx[:,0]
     sampled_valid_idx = torch.stack((sampled_bid,sampled_flat_img_id),-1)
-    assert sampled_valid_idx.shape[0] == bs * sample_num
+    #assert sampled_valid_idx.shape[0] == bs * sample_num
     return sampled_valid_idx
 
 def get_valid_points(data_dict, valid_sample_num=1, rgb_in=3):
@@ -114,6 +127,7 @@ def get_valid_points(data_dict, valid_sample_num=1, rgb_in=3):
     bs,h,w = data_dict['bs'], data_dict['h'], data_dict['w']
     if valid_sample_num != -1: # sample valid points
         valid_idx = sample_valid_points(data_dict['valid_mask'], valid_sample_num, block_x=8, block_y=8, data_dict=data_dict)
+        #print("valid_idx", valid_idx)
     else: # get all valid points
         valid_mask_flat = data_dict['valid_mask'].reshape(bs,-1)
         valid_idx = torch.nonzero(valid_mask_flat, as_tuple=False)
@@ -121,6 +135,11 @@ def get_valid_points(data_dict, valid_sample_num=1, rgb_in=3):
     valid_flat_img_id = valid_idx[:,1]
     # get rgb and xyz for valid points.
     valid_xyz = data_dict['xyz'][valid_bid, valid_flat_img_id]
+    
+    #print("valid_xyz", valid_xyz.shape)
+    
+    
+    
     rgb_img_flat = data_dict['rgb_img'].permute(0,2,3,1).contiguous().reshape(bs,-1,rgb_in)
     valid_rgb = rgb_img_flat[valid_bid, valid_flat_img_id]
     #print(len(valid_bid))
@@ -156,6 +175,7 @@ def get_occ_vox_bound(data_dict, res=16):
     if occ_vox_bid_global_coord.shape[0] == 0:
         print('No occupied voxel', data_dict['item_path'])
         return False
+    #print("occ_vox_bid_global_coord", occ_vox_bid_global_coord.shape)
     occ_vox_bid = occ_vox_bid_global_coord[:,0]
     occ_vox_global_coord = occ_vox_bid_global_coord[:,1:]
     ''' compute occupied voxel bound '''
@@ -204,7 +224,15 @@ def batch_get_occupied_idx(v, batch_id,
                     torch.arange(int(overlap)+1),
                     torch.arange(int(overlap)+1)), dim=-1).to(v.device)
     shift_idxs = shift_idxs.reshape(-1,3).unsqueeze(0)
-
+    
+    
+#    print("xmin", xmin)
+#    print("xmax", xmax)
+#    print("r", r)
+#    print("crop_size", crop_size)
+#    print("rr", rr)
+#    print("shift_idxs", shift_idxs)
+    
     # get coords of valid point w.r.t each overlapping voxel grid. (np,1 or 8,3)
     v_xyz = v.unsqueeze(1) - shift_idxs * crop_size * 0.5
     v_xmin = v.unsqueeze(1).repeat(1,shift_idxs.shape[1],1)
@@ -229,8 +257,11 @@ def batch_get_occupied_idx(v, batch_id,
         valid_mask = torch.logical_and(valid_mask, v_global_coord[:,:, i] >= 0)
         valid_mask = torch.logical_and(valid_mask, v_global_coord[:,:, i] < idx_grid.shape[i])
     # the global voxel coord of valid voxel of valid point, (valid_vox_num, 3)
+    
     valid_v_global_coord = v_global_coord[valid_mask]
+    #print("valid_v_global_coord", valid_v_global_coord)
     # the valid point index of valid voxel of valid point, (valid_vox_num, 1)
+    #print("v_pid.shape", v_pid.shape)
     valid_v_pid = v_pid[valid_mask]
     # the batch id of valid voxel of valid point, (valid_vox_num, 1)
     valid_v_bid = v_bid[valid_mask]
@@ -271,6 +302,7 @@ def get_miss_ray(data_dict):
     #print("miss_ray_dir.shape", miss_ray_dir.shape)
     miss_ray_dir = miss_ray_dir / torch.norm(miss_ray_dir, dim=-1, keepdim=True)
     miss_ray_dir = miss_ray_dir.view(-1, 3).float()
+    #print("miss_ray_dir", miss_ray_dir)
     ###################################
     # sample miss points 
     # (miss_point_num,2): 1st dim is batch idx, second dim is flatted img idx.
@@ -359,6 +391,12 @@ def compute_ray_aabb(data_dict):
 #    print("occ vox bid", data_dict['occ_vox_bid'].int().type())
     mask, dist = ray_aabb.forward(data_dict['miss_ray_dir'], data_dict['voxel_bound'], 
                         data_dict['miss_bid'].int(), data_dict['occ_vox_bid'].int())
+    
+    #print("data_dict['miss_ray_dir']", data_dict['miss_ray_dir'].shape)
+    #print(" data_dict['miss_bid']",  data_dict['miss_bid'].shape)
+    #print("data_dict['voxel_bound']", data_dict['voxel_bound'].shape)
+    #print("data_dict['occ_vox_bid']", data_dict['occ_vox_bid'].shape)
+    
     mask = mask.long()
     dist = dist.float()
 
@@ -444,11 +482,14 @@ def prepare_data(batch):
                       "cx" : batch["K_depth"][:, 0, 2].view(bs, -1).cuda(),
                       "cy" : batch["K_depth"][:, 1, 2].view(bs, -1).cuda(),
                      })
+    data_dict.update({"depth_path" : batch["depth_path"]})
+    data_dict.update({"K_depth" : batch["K_depth"].cuda()})
     data_dict.update({
                      "rgb_img" : rgb_img,
                      "xyz" : xyz_img.view(bs, -1, 3)
                      })
     data_dict.update({"path" : batch["rgb_path"]})
+    data_dict.update({"change_intrinsic" : batch["change_intrinsic"]})
     
     
     kps_2d_uv = batch["joints_2D_uv"]
@@ -472,6 +513,7 @@ def prepare_data(batch):
     
     
     valid_mask[torch.where(xyz_img[:, :, :, 2] == 0.0)] = 0.0
+    #print("length", len(torch.where(valid_mask!=0.0)[0]))
     
     
     data_dict.update({
@@ -603,6 +645,11 @@ def get_embedding_ours(data_dict, embed_fn, embeddirs_fn, full_rgb_feat, pnet_mo
 #    
 #    '''  Voxel Embedding '''
     valid_v_rgb = data_dict['valid_rgb'][data_dict['valid_v_pid']]
+    
+    print("valid_v_rgb", valid_v_rgb.shape)
+    
+    
+    
     if pnet_pos_type == 'rel': # relative position w.r.t voxel center
         pnet_inp = torch.cat((data_dict['valid_v_rel_coord'], valid_v_rgb),-1)
     else:
@@ -631,13 +678,14 @@ def get_embedding_ours(data_dict, embed_fn, embeddirs_fn, full_rgb_feat, pnet_mo
         'intersect_voxel_feat': intersect_voxel_feat
     })
 
-def get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model,
-                  local_embedding_type="ROIConcat", 
-                  rgb_embedding_type='ROIAlign', roi_inp_bbox=8, roi_out_bbox=2, pnet_pos_type="rel", pnet_model_type='twostage'):
+def get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model, point_resnet_model, rgb_global_flag,
+                  local_embedding_type="ROIConcat", rgb_embedding_type='ROIAlign', roi_inp_bbox=8, pnet_in_rgb_flag=True,
+                  roi_out_bbox=2, resnet_model_type="Resnet34_8s", fps_npts=2048,
+                  pnet_pos_type="rel", pnet_model_type='twostage'): 
     ########################### 
     #   Get embedding
     ##########################
-    torch.cuda.synchronize()
+    torch.cuda.synchronize() 
     t2 = time.time()
     bs,h,w = data_dict['bs'], data_dict['h'], data_dict['w']
     ''' Positional Encoding '''
@@ -650,13 +698,6 @@ def get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model,
     #print("intersect_raw_pos", intersect_raw_pos)
     intersect_enter_pos = intersect_dir * intersect_enter_dist.unsqueeze(-1)
     intersect_leave_pos = intersect_dir * intersect_leave_dist.unsqueeze(-1)
-    
-#    print("intersect_enter_pos", intersect_enter_pos.shape)
-#    print("intersect_leave_pos", intersect_leave_pos.shape)
-#    print("intersect_dir.shape", intersect_dir.shape)
-#    print("intersect_dist", intersect_dist.shape)
-    
-
     intersect_voxel_bound = data_dict['voxel_bound'][data_dict['occ_vox_intersect_idx']]
     intersect_voxel_center = (intersect_voxel_bound[:,:3] + intersect_voxel_bound[:,3:]) / 2.
     
@@ -674,59 +715,150 @@ def get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model,
     
     torch.cuda.synchronize()
     t4 = time.time()
-    ''' RGB Embedding ''' 
     miss_ray_intersect_img_ind = data_dict['miss_img_ind'][data_dict['miss_ray_intersect_idx']]
     miss_ray_intersect_bid = data_dict['miss_bid'][data_dict['miss_ray_intersect_idx']]
-    full_rgb_feat, global_rgb_feat = resnet_model(data_dict['rgb_img']) 
+    if "Resnet34_8s" in resnet_model_type:
+        torch.cuda.synchronize()
+        t4 = time.time()
+        full_rgb_feat, global_rgb_feat = resnet_model(data_dict['rgb_img'], camera_intrin=data_dict["K_depth"]) 
+        global_rgb_feat_bid = global_rgb_feat[miss_ray_intersect_bid]
+        torch.cuda.synchronize()
+        t5 = time.time()
+        print("t5  -t4", t5 - t4)
     
-    global_rgb_feat_bid = global_rgb_feat[miss_ray_intersect_bid]
-    #print("global_rgb_feat.shape", global_rgb_feat.shape)
-    
-    # ROIAlign to pool features
-    if rgb_embedding_type == 'ROIAlign':
-        # compute input boxes for ROI Align
-        miss_ray_intersect_ul = miss_ray_intersect_img_ind - roi_inp_bbox // 2
-        miss_ray_intersect_br = miss_ray_intersect_img_ind + roi_inp_bbox // 2
-        # clamp is done in original image coords
-        miss_ray_intersect_ul[:,0] = torch.clamp(miss_ray_intersect_ul[:,0], min=0., max=w-1)
-        miss_ray_intersect_ul[:,1] = torch.clamp(miss_ray_intersect_ul[:,1], min=0., max=h-1)
-        miss_ray_intersect_br[:,0] = torch.clamp(miss_ray_intersect_br[:,0], min=0., max=w-1)
-        miss_ray_intersect_br[:,1] = torch.clamp(miss_ray_intersect_br[:,1], min=0., max=h-1)
-        roi_boxes = torch.cat((miss_ray_intersect_bid.unsqueeze(-1), miss_ray_intersect_ul, miss_ray_intersect_br),-1).float()
-        # sampled rgb features for ray-voxel intersect pair. (pair num,rgb_feat_len,roi_out_bbox,roi_out_bbox)
-        spatial_scale = 1.0
-        intersect_rgb_feat = tv_ops.roi_align(full_rgb_feat, roi_boxes, 
-                                output_size=roi_out_bbox,
-                                spatial_scale=spatial_scale,
-                                aligned=True)
+    if "Point" not in resnet_model_type and  "Resnet34_8s" in resnet_model_type:
+        ''' RGB Embedding ''' 
+        #print("data_dict['miss_bid']", data_dict['miss_bid'].shape)
+        #print("data_dict['rgb_img']", data_dict["rgb_img"].shape)
         
-        try:
-            #print("intersect_rgb_feat.shape", intersect_rgb_feat.shape)
-            if local_embedding_type == "ROIConcat":
-                intersect_rgb_feat = intersect_rgb_feat.reshape(intersect_rgb_feat.shape[0],-1)
-                intersect_rgb_feat = torch.cat([intersect_rgb_feat, global_rgb_feat_bid],-1)
-            elif local_embedding_type == "ROIPooling":
-                maxpool = nn.MaxPool2d(roi_out_bbox)
-                intersect_rgb_feat = maxpool(intersect_rgb_feat).reshape(intersect_rgb_feat.shape[0],-1)
-                intersect_rgb_feat = torch.cat([intersect_rgb_feat, global_rgb_feat_bid],-1)
-            
-            #print("intersect_rgb_feat.shape", intersect_rgb_feat.shape)
-            
-        except:
-            print(intersect_rgb_feat.shape)
-            print(roi_boxes.shape)
-            print(data_dict['miss_ray_intersect_idx'].shape, miss_ray_intersect_bid.shape, miss_ray_intersect_img_ind.shape)
-            print(data_dict['total_miss_sample_num'])
-            print(data_dict['item_path'])
-    else:
-        raise NotImplementedError('Does not support RGB embedding type: {}'.format(self.opt.model.rgb_embedding_type))
+        # ROIAlign to pool features
+        if rgb_embedding_type == 'ROIAlign':
+            # compute input boxes for ROI Align
+            miss_ray_intersect_ul = miss_ray_intersect_img_ind - roi_inp_bbox // 2
+            miss_ray_intersect_br = miss_ray_intersect_img_ind + roi_inp_bbox // 2
+            # clamp is done in original image coords
+            miss_ray_intersect_ul[:,0] = torch.clamp(miss_ray_intersect_ul[:,0], min=0., max=w-1)
+            miss_ray_intersect_ul[:,1] = torch.clamp(miss_ray_intersect_ul[:,1], min=0., max=h-1)
+            miss_ray_intersect_br[:,0] = torch.clamp(miss_ray_intersect_br[:,0], min=0., max=w-1)
+            miss_ray_intersect_br[:,1] = torch.clamp(miss_ray_intersect_br[:,1], min=0., max=h-1)
+            roi_boxes = torch.cat((miss_ray_intersect_bid.unsqueeze(-1), miss_ray_intersect_ul, miss_ray_intersect_br),-1).float()
+            # sampled rgb features for ray-voxel intersect pair. (pair num,rgb_feat_len,roi_out_bbox,roi_out_bbox)
+            spatial_scale = 1.0        
+            intersect_rgb_feat = tv_ops.roi_align(full_rgb_feat, roi_boxes, 
+                                    output_size=roi_out_bbox,
+                                    spatial_scale=spatial_scale,
+                                    aligned=True)
+    
+            try:
+                #print("intersect_rgb_feat.shape", intersect_rgb_feat.shape)
+                if local_embedding_type == "ROIConcat":
+                    intersect_rgb_feat = intersect_rgb_feat.reshape(intersect_rgb_feat.shape[0],-1)
+                    intersect_rgb_feat = torch.cat([intersect_rgb_feat, global_rgb_feat_bid],-1)
+                elif local_embedding_type == "ROIPooling":
+                    maxpool = nn.MaxPool2d(roi_out_bbox)
+                    intersect_rgb_feat = maxpool(intersect_rgb_feat).reshape(intersect_rgb_feat.shape[0],-1)
+                    
+                    #print("depth_path", data_dict["depth_path"])
+                    #print("data_dict['miss_ray_intersect_idx']", data_dict['miss_ray_intersect_idx'])
+#                    save_id = data_dict["depth_path"][0].split("/")[-1].replace("npy", "json")
+#                    save_path = os.path.join(f"/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/depth_c2rp/voxel_utils/roi", "change_87")    
+#                    if not os.path.exists(save_path):
+#                        os.makedirs(save_path)
+                    
+#                    save_path = os.path.join(save_path, save_id)
+#                    file_write_meta = open(save_path, 'w')
+#                    meta_json = dict()
+#                    #meta_json["path"] = data_dict["depth_path"][0].detach().cpu().numpy().tolist()
+#                    meta_json["ray_intersect_occ_voc_num"] = miss_ray_intersect_img_ind.shape[0]
+#                    meta_json["miss_ray_intersect_img_ind"] = miss_ray_intersect_img_ind.detach().cpu().numpy().tolist()
+#                    print(miss_ray_intersect_img_ind.shape)
+#                    meta_json["intersect_rgb_feat"] = intersect_rgb_feat.detach().cpu().numpy().tolist()
+#                    json_save = json.dumps(meta_json)
+#                    file_write_meta.write(json_save)
+#                    file_write_meta.close()
+    ##                
+                    
+                    
+                    
+                    intersect_rgb_feat = torch.cat([intersect_rgb_feat, global_rgb_feat_bid],-1)
+                    
+                    #print("intersect_rgb_feat.shape", intersect_rgb_feat.shape)
+                elif local_embedding_type == "NOROI":
+                    maxpool = nn.MaxPool2d(roi_out_bbox)
+                    intersect_rgb_feat = global_rgb_feat_bid
+                
+                #print("intersect_rgb_feat.shape", intersect_rgb_feat.shape)
+                
+            except:
+                print(intersect_rgb_feat.shape)
+                print(roi_boxes.shape)
+                print(data_dict['miss_ray_intersect_idx'].shape, miss_ray_intersect_bid.shape, miss_ray_intersect_img_ind.shape)
+                print(data_dict['total_miss_sample_num'])
+                print(data_dict['item_path'])
+        else:
+            raise NotImplementedError('Does not support RGB embedding type: {}'.format(self.opt.model.rgb_embedding_type))
+    
+    elif resnet_model_type == "Point_Resnet34_8s" or resnet_model_type == "PointResnet":
+        miss_img_ind_copy = data_dict['miss_img_ind'].clone()
+        miss_bid_copy = data_dict['miss_bid'].clone()
+        N = miss_bid_copy.shape[0]
+        #print("N", N)
+        
+        miss_img_ind_ul = miss_img_ind_copy - roi_inp_bbox // 2
+        miss_img_ind_br = miss_img_ind_copy + roi_inp_bbox // 2
+        # clamp is done in original image coords
+        miss_img_ind_ul[:,0] = torch.clamp(miss_img_ind_ul[:,0], min=0., max=w-1)
+        miss_img_ind_ul[:,1] = torch.clamp(miss_img_ind_ul[:,1], min=0., max=h-1)
+        miss_img_ind_br[:,0] = torch.clamp(miss_img_ind_br[:,0], min=0., max=w-1)
+        miss_img_ind_br[:,1] = torch.clamp(miss_img_ind_br[:,1], min=0., max=h-1)
+        
+        roi_boxes = torch.cat((miss_bid_copy.unsqueeze(-1), miss_img_ind_ul, miss_img_ind_br),-1).float()
+        spatial_scale = 1.0
+        
+        rgb_roi_pos = tv_ops.roi_align(data_dict["rgb_img"], roi_boxes, 
+                                    output_size=roi_out_bbox,
+                                    spatial_scale=spatial_scale,
+                                    aligned=True) # N x 3 x roi_out x roi_out
+        
+        rgb_roi_pos = rgb_roi_pos.permute(0, 2, 3, 1).view(N, -1, 3).contiguous()
+        rgb_roi_pos = rgb_roi_pos.view(bs, N//bs, -1, 3).contiguous()
+        
+        rgb_roi_feat = point_resnet_model(rgb_roi_pos).view(N, -1) # (bs x num_kps) x out_dim
+        #intersect_rgb_feat = rgb_roi_feat[miss_ray_intersect_bid] # data_dict["miss_ray_intersect_idx"]
+        intersect_rgb_feat = rgb_roi_feat[data_dict["miss_ray_intersect_idx"]]
+        
+        if rgb_global_flag:
+            intersect_rgb_feat = torch.cat([intersect_rgb_feat, global_rgb_feat_bid],-1)  
+    
+    elif resnet_model_type == "Pointnet_pp":
+    
+        # print(data_dict["miss_ray_intersect_idx"])
+        # print(miss_ray_intersect_bid)
+        valid_xyz = data_dict["valid_xyz"].clone()
+        bs = data_dict["bs"]
+        valid_xyz = valid_xyz.reshape(bs, -1, 3).contiguous() # bs x N x 3
+        
+        pts_idx = ptn_utils.furthest_point_sample(valid_xyz, fps_npts)
+        sampled_pts = ptn_utils.gather_operation(valid_xyz.transpose(1, 2).contiguous(), pts_idx).transpose(1, 2).contiguous() # bs x fps_npts x 3
+        
+        global_rgb_feat = resnet_model(sampled_pts)
+        intersect_rgb_feat = global_rgb_feat[miss_ray_intersect_bid]
+        
+    
+        
     torch.cuda.synchronize()
     t5 = time.time()
 #    
 #    '''  Voxel Embedding '''
     valid_v_rgb = data_dict['valid_rgb'][data_dict['valid_v_pid']]
+    
+    #print("valid_v_rgb", valid_v_rgb.shape)
+    
     if pnet_pos_type == 'rel': # relative position w.r.t voxel center
-        pnet_inp = torch.cat((data_dict['valid_v_rel_coord'], valid_v_rgb),-1)
+        if pnet_in_rgb_flag:
+            pnet_inp = torch.cat((data_dict['valid_v_rel_coord'], valid_v_rgb),-1)
+        else:
+            pnet_inp = data_dict['valid_v_rel_coord']
     else:
         raise NotImplementedError('Does not support Pnet pos type: {}'.format(self.opt.model.pnet_pos_type))
     # pointnet forward
@@ -750,8 +882,8 @@ def get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model,
         'intersect_leave_pos_embed': intersect_leave_pos_embed,
         "intersect_raw_pos_embed" : intersect_raw_pos_embed,
         'intersect_dir_embed': intersect_dir_embed,
-        'full_rgb_feat': full_rgb_feat,
-        "global_rgb_feat" : global_rgb_feat,
+        #'full_rgb_feat': full_rgb_feat,
+        #"global_rgb_feat" : global_rgb_feat,
         'intersect_rgb_feat': intersect_rgb_feat,
         'intersect_voxel_feat': intersect_voxel_feat
     })
@@ -773,10 +905,17 @@ def get_pred(data_dict, exp_type, epoch, offset_dec,prob_dec,device,
                                data_dict['intersect_enter_pos_embed'].contiguous(),
                                data_dict['intersect_leave_pos_embed'].contiguous(), data_dict['intersect_dir_embed'].contiguous()),-1)
        else:
-           inp_embed = torch.cat(( data_dict['intersect_voxel_feat'].contiguous(), data_dict['intersect_rgb_feat'].contiguous(),
+           #intersect_raw_pos_embed = torch.ones_like(data_dict['intersect_raw_pos_embed']).cuda()
+           intersect_raw_pos_embed = data_dict['intersect_raw_pos_embed']
+           #intersect_voxel_feat = torch.ones_like(data_dict['intersect_voxel_feat']).cuda()
+           intersect_voxel_feat = data_dict['intersect_voxel_feat']
+           #intersect_rgb_feat = torch.ones_like(data_dict['intersect_rgb_feat']).cuda()
+           intersect_rgb_feat = data_dict['intersect_rgb_feat']
+           
+           inp_embed = torch.cat((intersect_voxel_feat, intersect_rgb_feat.contiguous(),
                                data_dict['intersect_enter_pos_embed'].contiguous(),
                                data_dict['intersect_leave_pos_embed'].contiguous(), 
-                               data_dict['intersect_raw_pos_embed'].contiguous(),data_dict['intersect_dir_embed'].contiguous()),-1)
+                               intersect_raw_pos_embed.contiguous(),data_dict['intersect_dir_embed'].contiguous()),-1)
            #print("intersect_raw_pos_embed", data_dict['intersect_raw_pos_embed'].contiguous())
        
 #       print("data_dict['intersect_voxel_feat']", data_dict['intersect_voxel_feat'].shape)
@@ -821,6 +960,25 @@ def get_pred(data_dict, exp_type, epoch, offset_dec,prob_dec,device,
            'pred_prob_end_softmax': pred_prob_end_softmax,
            'pred_pos': pred_pos,
        })
+#       print("pred_pos", pred_pos)
+#       print("data_dict['intersect_voxel_feat']", data_dict['intersect_voxel_feat'].shape)
+#       
+#       
+#       save_id = data_dict["depth_path"][0].split("/")[-1].replace("npy", "json")
+#       save_path = os.path.join(f"/DATA/disk1/hyperplane/Depth_C2RP/Code/Ours_Code/output/83/PRED_POS/", "CHANGE_RAW")     
+#       if not os.path.exists(save_path):
+#           os.makedirs(save_path)
+#                    
+#       save_path = os.path.join(save_path, save_id)
+#       file_write_meta = open(save_path, 'w')
+#       meta_json = dict()
+#       #meta_json["path"] = data_dict["depth_path"][0].detach().cpu().numpy().tolist()
+#       meta_json["pred_pos"] = pred_pos.detach().cpu().numpy().tolist()
+#       json_save = json.dumps(meta_json)
+#       file_write_meta.write(json_save)
+#       file_write_meta.close()
+    ##                
+       
        
 def gradient(x):
     # idea from tf.image.image_gradients(image)
@@ -900,7 +1058,6 @@ def compute_loss(data_dict, exp_type, epoch,device,
             err = torch.Tensor([0]).float().to(device)
         else:
             err = torch.sum(torch.sqrt(torch.sum((data_dict['pred_pos'] - data_dict['gt_pos'])**2,-1))*zero_mask) / elem_num
-        # compute depth errors following cleargrasp
         zero_mask_idx = torch.nonzero(zero_mask, as_tuple=False).reshape(-1)
 
 
@@ -997,14 +1154,25 @@ if __name__ == "__main__":
                                      aug_mode=False)
     
     testing_dataset.train()
-    testing_loader = DataLoader(testing_dataset,batch_size=18,
-                                  num_workers=1, pin_memory=True, drop_last=True) 
+    testing_loader = DataLoader(testing_dataset,batch_size=1,
+                                  num_workers=4, pin_memory=True, drop_last=True) 
     
     t_list = []       
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")               
     
-    embed_fn, embeddirs_fn, resnet_model, pnet_model,offset_dec,prob_dec = build_model(device)
-    #refine_model = build_voxel_refine_network(cfg,device).cuda()
+    #embed_fn, embeddirs_fn, resnet_model, pnet_model,offset_dec,prob_dec = build_model(device)
+    
+    model = build_voxel_network(cfg, device)
+    
+    embed_fn = model.embed_fn
+    embeddirs_fn = model.embeddirs_fn 
+    resnet_model = model.resnet_model
+    pnet_model = model.pnet_model
+    offset_dec = model.offset_dec
+    prob_dec = model.prob_dec
+    
+    
+    refine_model = build_voxel_refine_network(cfg,device).cuda()
     
     refine_flag = True
     
@@ -1021,128 +1189,70 @@ if __name__ == "__main__":
                                    {'params': prob_dec.parameters(), 'lr': 0.001},
                                    #{'params': resnet_woff.parameters(), 'lr': 0.001}, 
                                    ])
-    #refine_optimizer = torch.optim.AdamW(refine_model.parameters(), lr=0.001)
+    refine_optimizer = torch.optim.AdamW(refine_model.parameters(), lr=0.001)
     heatmap_criterion = torch.nn.MSELoss()
     woff_criterion = torch.nn.MSELoss()
-    #with torch.no_grad():
-    all_kps = 0
-    occ_kps = 0
-    for batch_idx, batch in enumerate(tqdm(testing_loader)): 
-#        if batch_idx > 50:
-#            break  
-        # prepare data
-        
-        
-#        torch.cuda.synchronize()
-#        start_time = time.time()
-#        if batch_idx >= 1:
-#            #print(time.time() - pre_time)
-#            print("load time", start_time - pre_time)
-#        
-#        input_tensor = batch['rgb_img'].to(device).float()
-#        joints_3d = batch['joints_3D_Z'].to(device).float()
-#        b, c, h, w = input_tensor.size()
-#        uv_ind = batch["uv_ind"].to(device).type(torch.int64)
-#        uv_off = batch["uv_off"].to(device).float()
-#        
-#        outputs = resnet_woff(input_tensor)
-#        heatmap_pred, off_pred, full_xyz_feat = outputs[0], outputs[1], outputs[2]
-#        full_xyz_feat = F.interpolate(full_xyz_feat, (h, w), mode='bilinear', align_corners=False)
-#        #print("full_xyz_feat.shape", full_xyz_feat.shape)
-#        heatmap_gt = batch['heatmap_25d'].to(device).float()
-#        heatmap_pred = (F.interpolate(heatmap_pred, (h, w), mode='bicubic', align_corners=False) + 1) / 2.
-#        heatmap_loss = heatmap_criterion(heatmap_gt, heatmap_pred)
-#        
-#        off_pred = F.interpolate(off_pred, (h, w), mode='bicubic',align_corners=False) # B x 2 x H x W
-#        off_pred = off_pred.permute(0, 2, 3, 1).contiguous()
-#        pred_uv_off = ((off_pred[:, :, :, :2]).view(b, -1, 2).contiguous())
-#        uv_ind = uv_ind[:, :, :1].expand(uv_ind.size(0), uv_ind.size(1), pred_uv_off.size(2))
-#        pred_uv_off = pred_uv_off.gather(1, uv_ind)
-#        woff_loss = woff_criterion(pred_uv_off, uv_off) 
-        
-        
-#        torch.cuda.synchronize()
-#        t_ = time.time()
-        data_dict = prepare_data(batch) # change!
-#        torch.cuda.synchronize()
-#        end_time = time.time()
+    with torch.no_grad():
+        all_kps = 0
+        res = []
+        epoch = 1
+        for batch_idx, batch in enumerate(tqdm(testing_loader)): 
+            torch.cuda.synchronize()
+            t1 = time.time()
+            # prepare data
+            data_dict = prepare_data(batch)
+            
+            # get valid pts other than kps
+            get_valid_points(data_dict, valid_sample_num=cfg["voxel_network"]["valid_sample_num"], rgb_in=cfg["voxel_network"]["rgb_in"])
+            
+            # get occupied voxel data
+            get_occ_vox_bound(data_dict, res=cfg["voxel_network"]["res"])
+            
+            # get kps ray data
+            get_miss_ray(data_dict)
+            
+            # ray AABB slab test
+            intersect_pair_flag = compute_ray_aabb(data_dict) 
+            
+            # compute gt
+            compute_gt(data_dict)
+            
+            # get embedding
+            #get_embedding_ours(data_dict, embed_fn, embeddirs_fn, full_xyz_feat, pnet_model)
+            get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model, local_embedding_type=cfg["voxel_network"]["local_embedding_type"]) 
+            
+            # get pred
+            get_pred(data_dict, "train", epoch-1, offset_dec, prob_dec, device, raw_input_type=cfg["voxel_network"]["raw_input_type"])
+                
+    #        # calculate loss
+            loss_dict = compute_loss(data_dict, "train", epoch,device) 
+            loss = loss_dict["pos_loss"] + loss_dict["prob_loss"]
+            
+            
+            torch.cuda.synchronize()
+            t2 = time.time()
+            if refine_flag:
+                for cur_iter in range(cfg["refine_voxel_network"]["refine_forward_times"]):
+                    #print("iter res")
+                    if cur_iter == 0:
+                        pred_pos_refine = get_pred_refine(data_dict, data_dict['pred_pos'], "train", cur_iter, device, 
+                        refine_model.embeddirs_fn, refine_model.pnet_model, refine_model.embed_fn, refine_model.offset_dec,
+                        local_embedding_type=cfg["voxel_network"]["local_embedding_type"], raw_input_type=cfg["voxel_network"]["raw_input_type"])
+                    else:
+                        pred_pos_refine = get_pred_refine(data_dict, pred_pos_refine, "train", cur_iter, device,
+                        refine_model.embeddirs_fn, refine_model.pnet_model, refine_model.embed_fn, refine_model.offset_dec,
+                        local_embedding_type=cfg["voxel_network"]["local_embedding_type"], raw_input_type=cfg["voxel_network"]["raw_input_type"])
+            
+                data_dict['pred_pos_refine'] = pred_pos_refine
+                loss_dict_refine = compute_refine_loss(data_dict, "train", batch_idx)
+            
+            torch.cuda.synchronize()
+            t3 = time.time()
+            res.append(t3 - t2)
+            print("t3 - t2", t3 - t2)
+            print("t2 - t1", t2 - t1)
+            print("mean refinement", np.mean(res))
 
-        
-        # get valid pts other than kps
-#        torch.cuda.synchronize()
-#        t_ = time.time()
-        get_valid_points(data_dict, valid_sample_num=10000) # no edition
-#        torch.cuda.synchronize()
-#        end_time = time.time()
-
-
-        
-        # get occupied voxel data
-#        torch.cuda.synchronize()
-#        t_ = time.time()
-        get_occ_vox_bound(data_dict, res=12) # no edition
-#        torch.cuda.synchronize()
-#        end_time = time.time()
-
-        
-        # get miss ray data
-#        torch.cuda.synchronize()
-#        t_ = time.time()
-        get_miss_ray(data_dict) # change
-#        torch.cuda.synchronize()
-#        end_time = time.time()
-
-        
-        # ray AABB slab test
-#        torch.cuda.synchronize()
-#        t_ = time.time()
-        intersect_pair_flag = compute_ray_aabb(data_dict)  # change
-#        torch.cuda.synchronize()
-#        end_time = time.time()
-        
-        #print("unique", len(torch.unique(miss_ray_intersect_idx)))
-    #print("all", data_dict["miss_ray_dir"].shape[0])
-        all_kps += data_dict["miss_ray_dir"].shape[0]
-        occ_kps += len(torch.unique(data_dict["miss_ray_intersect_idx"]))
-#        # compute gt
-#        torch.cuda.synchronize()
-#        t_ = time.time()
-        compute_gt(data_dict)
-#        torch.cuda.synchronize()
-#        end_time = time.time()
-
-        
-        # get embedding
-#        torch.cuda.synchronize()
-#        t_ = time.time()
-        get_embedding(data_dict, embed_fn, embeddirs_fn, resnet_model, pnet_model) 
-#        get_embedding_ours(data_dict, embed_fn, embeddirs_fn, full_xyz_feat, pnet_model)
-#        torch.cuda.synchronize()
-#        end_time = time.time()
-
-        
-        # get pred
-        get_pred(data_dict, "train", batch_idx, offset_dec, prob_dec, device)
-#        
-#        
-##        
-#        # calculate loss
-#        loss_dict = compute_loss(data_dict, "train", batch_idx,device) 
-#        loss = loss_dict["pos_loss"] + loss_dict["prob_loss"]
-#        
-#
-#        if refine_flag:
-#            for cur_iter in range(cfg["refine_voxel_network"]["refine_forward_times"]):
-#                if cur_iter == 0:
-#                    pred_pos_refine = get_pred_refine(data_dict, data_dict['pred_pos'], "train", cur_iter, device, 
-#                    refine_model.embeddirs_fn, refine_model.pnet_model, refine_model.embed_fn, refine_model.offset_dec,)
-#                else:
-#                    pred_pos_refine = get_pred_refine(data_dict, pred_pos_refine, "train", cur_iter, device,
-#                    refine_model.embeddirs_fn, refine_model.pnet_model, refine_model.embed_fn, refine_model.offset_dec,)
-#        
-#            data_dict['pred_pos_refine'] = pred_pos_refine
-#            loss_dict_refine = compute_refine_loss(data_dict, "train", batch_idx)
-#
 #            refine_optimizer.zero_grad()
 #            loss_dict_refine["pos_loss"].backward()
 #            refine_optimizer.step()
@@ -1153,7 +1263,7 @@ if __name__ == "__main__":
 #            optimizer.step()
         
         
-        # time accumulated 
+#        # time accumulated 
 #        if batch_idx >= 1:
 #            #print(time.time() - pre_time)
 #            torch.cuda.synchronize()
@@ -1166,10 +1276,10 @@ if __name__ == "__main__":
     
         
         
-        pass 
-    print(np.mean(t_list)) 
-    print(all_kps)
-    print(occ_kps)
+#        pass 
+#    print(np.mean(t_list)) 
+#    print(all_kps)
+#    print(occ_kps)
     
     
     # considering what is involved in a batch

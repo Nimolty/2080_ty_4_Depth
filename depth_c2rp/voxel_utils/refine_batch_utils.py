@@ -23,6 +23,7 @@ from tqdm import tqdm
 
 def get_pred_refine(data_dict, pred_pos, exp_type, cur_iter, device, 
                     refine_embeddirs_fn, refine_pnet_model, refine_embed_fn, refine_offset_dec,
+                    local_embedding_type="ROIConcat", raw_input_type=False,
                     refine_perturb=True, refine_perturb_prob=0.8, refine_rgb_embedding_type='ROIAlign',
                     refine_roi_inp_bbox=8, roi_out_bbox=2, refine_pnet_pos_type='rel', mask_type="all", refine_use_all_pix=True,
                     refine_pnet_model_type='twostage', refine_offset_range=[-0.2, 0.2],
@@ -56,7 +57,16 @@ def get_pred_refine(data_dict, pred_pos, exp_type, cur_iter, device,
     miss_ray_img_ind = data_dict['miss_img_ind']
     miss_ray_bid = data_dict['miss_bid']
     
-    global_feat = data_dict["global_rgb_feat"]
+    # raw embed
+    miss_raw_pos = data_dict["miss_xyz_raw"]
+    
+    
+    global_rgb_feat = data_dict["global_rgb_feat"]
+    global_rgb_feat_bid = global_rgb_feat[miss_ray_bid]
+    
+    
+    #print("miss_raw_pos.shape", miss_raw_pos.shape)
+    #print("global_rgb_feat_bid", global_rgb_feat_bid.shape)
     # ROIAlign to pool features
     if refine_rgb_embedding_type == 'ROIAlign':
         # compute input boxes for ROI Align
@@ -75,8 +85,18 @@ def get_pred_refine(data_dict, pred_pos, exp_type, cur_iter, device,
                                 spatial_scale=spatial_scale,
                                 aligned=True)
         try:
-            intersect_rgb_feat_end = intersect_rgb_feat_end.reshape(intersect_rgb_feat_end.shape[0],-1)
-            intersect_rgb_feat_end = torch.cat([intersect_rgb_feat_end, global_feat[miss_ray_bid]], dim=-1)
+            if local_embedding_type == "ROIConcat":
+                intersect_rgb_feat_end = intersect_rgb_feat_end.reshape(intersect_rgb_feat_end.shape[0],-1)
+                intersect_rgb_feat_end = torch.cat([intersect_rgb_feat_end, global_rgb_feat_bid],-1)
+            elif local_embedding_type == "ROIPooling":
+                maxpool = nn.MaxPool2d(roi_out_bbox)
+                #print("intersect_rgb_feat_end", intersect_rgb_feat_end.shape)
+                intersect_rgb_feat_end = maxpool(intersect_rgb_feat_end).reshape(intersect_rgb_feat_end.shape[0],-1)
+                intersect_rgb_feat_end = torch.cat([intersect_rgb_feat_end, global_rgb_feat_bid],-1)
+            elif local_embedding_type == "NOROI":
+                intersect_rgb_feat_end = global_rgb_feat_bid
+            #intersect_rgb_feat_end = intersect_rgb_feat_end.reshape(intersect_rgb_feat_end.shape[0],-1)
+            #intersect_rgb_feat_end = torch.cat([intersect_rgb_feat_end, global_feat[miss_ray_bid]], dim=-1)
             #print("intersect_rgb_feat_end", intersect_rgb_feat_end.shape)
         except:
             print(data_dict['item_path'])
@@ -130,15 +150,22 @@ def get_pred_refine(data_dict, pred_pos, exp_type, cur_iter, device,
     # all abs
     enter_pos = pred_pos
     intersect_pos_embed_end = refine_embed_fn(enter_pos)
+    intersect_raw_pos_embed = refine_embed_fn(miss_raw_pos)
     # concat inp
-    inp_embed = torch.cat((intersect_voxel_feat_end, intersect_rgb_feat_end, 
+    if not raw_input_type:
+        inp_embed = torch.cat((intersect_voxel_feat_end, intersect_rgb_feat_end, 
                     intersect_pos_embed_end, intersect_dir_embed_end),-1)
-    
-    print("inp-embed", inp_embed.shape)
+    else:
+        inp_embed = torch.cat((intersect_voxel_feat_end, intersect_rgb_feat_end, 
+                    intersect_pos_embed_end, intersect_raw_pos_embed, intersect_dir_embed_end),-1)
+
     
     pred_refine_offset = refine_offset_dec(inp_embed)
     pred_scaled_refine_offset = pred_refine_offset * (refine_offset_range[1] - refine_offset_range[0]) + refine_offset_range[0]
     pred_pos_refine = pred_pos + pred_scaled_refine_offset * data_dict['miss_ray_dir']
+    
+    
+    #print("intersect_raw_pos_embed", data_dict["intersect_raw_pos_embed"].shape)
     return pred_pos_refine
 
         
@@ -151,9 +178,9 @@ def compute_refine_loss(data_dict, exp_type, epoch,
     ''' position loss '''
     if refine_pos_loss_type == 'single':
         if not refine_hard_neg:
-            pos_loss = refine_pos_loss_fn(data_dict['pred_pos_refine'], data_dict['gt_pos'])
+            pos_loss = refine_pos_loss_fn(data_dict['pred_pos'], data_dict['gt_pos'])
         else:
-            pos_loss_unreduce = torch.mean((data_dict['pred_pos_refine'] - data_dict['gt_pos']).abs(),-1)
+            pos_loss_unreduce = torch.mean((data_dict['pred_pos'] - data_dict['gt_pos']).abs(),-1)
             k = int(pos_loss_unreduce.shape[0] * refine_hard_neg_ratio)
             pos_loss_topk,_ = torch.topk(pos_loss_unreduce, k)
             pos_loss = torch.mean(pos_loss_topk)

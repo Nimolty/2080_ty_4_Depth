@@ -37,7 +37,6 @@ def init_optimizer(model, cfg):
     
     
     
-    
 
 def adapt_lr(optimizer, global_iter, base_lr, max_iters): 
     cur_iters = global_iter

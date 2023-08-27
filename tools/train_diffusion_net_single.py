@@ -170,7 +170,43 @@ def main(cfg):
     real_4_dataset.load_data()   
     real_4_dataloader = DataLoader(real_4_dataset, batch_size=cfg["DIFF_EVAL"]["BATCH_SIZE"], shuffle=False,
                                   num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=False) 
-    
+
+    real_6_dataset = copy.copy(toy_dataset)
+    real_6_dataset.real_dataset_dir = Path("/DATA/disk1/hyperplane/Depth_C2RP/Data/Real_Test_0613/6_D415_left_1/")
+    real_6_dataset.real()
+    real_6_dataset.load_data()   
+    real_6_dataloader = DataLoader(real_6_dataset, batch_size=cfg["DIFF_EVAL"]["BATCH_SIZE"], shuffle=False,
+                                  num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=False) 
+                                  
+    real_8_dataset = copy.copy(toy_dataset)
+    real_8_dataset.real_dataset_dir = Path("/DATA/disk1/hyperplane/Depth_C2RP/Data/Real_Test_0613/8_kinect_left_1/")
+    real_8_dataset.real()
+    real_8_dataset.load_data()   
+    real_8_dataloader = DataLoader(real_8_dataset, batch_size=cfg["DIFF_EVAL"]["BATCH_SIZE"], shuffle=False,
+                                  num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=False) 
+
+    real_9_dataset = copy.copy(toy_dataset)
+    real_9_dataset.real_dataset_dir = Path("/DATA/disk1/hyperplane/Depth_C2RP/Data/Real_Test_0613/9_kinect_left_0/")
+    real_9_dataset.real()
+    real_9_dataset.load_data()   
+    real_9_dataloader = DataLoader(real_9_dataset, batch_size=cfg["DIFF_EVAL"]["BATCH_SIZE"], shuffle=False,
+                                  num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=False) 
+                                  
+    real_10_dataset = copy.copy(toy_dataset)
+    real_10_dataset.real_dataset_dir = Path("/DATA/disk1/hyperplane/Depth_C2RP/Data/Real_Test_0613/10_kinect_right_1/")
+    real_10_dataset.real()
+    real_10_dataset.load_data()   
+    real_10_dataloader = DataLoader(real_10_dataset, batch_size=cfg["DIFF_EVAL"]["BATCH_SIZE"], shuffle=False,
+                                  num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=False) 
+
+    real_12_dataset = copy.copy(toy_dataset)
+    real_12_dataset.real_dataset_dir = Path("/DATA/disk1/hyperplane/Depth_C2RP/Data/Real_Test_0613/12_D415_right_1/")
+    real_12_dataset.real()
+    real_12_dataset.load_data()   
+    real_12_dataloader = DataLoader(real_12_dataset, batch_size=cfg["DIFF_EVAL"]["BATCH_SIZE"], shuffle=False,
+                                  num_workers=train_cfg["NUM_WORKERS"], pin_memory=True, drop_last=False) 
+
+
     # Build Recording and Saving Path
     save_path = os.path.join(cfg["SAVE_DIR"], str(cfg["EXP_ID"]))
     checkpoint_path = os.path.join(save_path, "CHECKPOINT")
@@ -302,6 +338,11 @@ def main(cfg):
                  "real_2_D415_front_1" : [real_2_dataloader],
                  "real_3_kinect_front_0" : [real_3_dataloader],
                  "real_4_kinect_front_1" : [real_4_dataloader],
+                 "6_D415_left_1": [real_6_dataloader],
+                 "8_kinect_left_1": [real_8_dataloader],
+                 "9_kinect_left_0": [real_9_dataloader],
+                 "10_kinect_right_1": [real_10_dataloader],
+                 "12_D415_right_1": [real_12_dataloader],
                  }
         #split = {"Real" : [real_sampler, real_loader],}
         heatmap_model.eval()

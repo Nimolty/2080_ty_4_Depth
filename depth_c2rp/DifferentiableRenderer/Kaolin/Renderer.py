@@ -204,7 +204,7 @@ class DiffPFDepthRenderer():
        
        self.RT_optimizer = torch.optim.Adam(params=[self.quaternion, self.translation], lr=self.RT_lr)
    
-   def set_all_optimizer(self, joints_angle_pred, quaternion, translation, dr_order="single"):
+   def set_all_optimizer(self, quaternion, translation, joints_angle_pred, dr_order="single"):
        # quaternion : B x 4
        # translation : B x 3
        self.quaternion = quaternion
@@ -223,52 +223,52 @@ class DiffPFDepthRenderer():
        self.joint6 = joints_angle_pred[:, 5:6, :]
        self.joint7 = joints_angle_pred[:, 6:7, :]
        
-       self.joint1.requires_grad = True
-       self.joint2.requires_grad = True
-       self.joint3.requires_grad = True
-       self.joint4.requires_grad = True
-       self.joint5.requires_grad = True
-       self.joint6.requires_grad = True
-       self.joint7.requires_grad = True
+#       self.joint1.requires_grad = True
+#       self.joint2.requires_grad = True
+#       self.joint3.requires_grad = True
+#       self.joint4.requires_grad = True
+#       self.joint5.requires_grad = True
+#       self.joint6.requires_grad = True
+#       self.joint7.requires_grad = True
        
-       self.GA_joint1_optimizer = torch.optim.Adam([{'params': self.joint1, 'lr': self.GA_lr}])
-       self.GA_joint2_optimizer = torch.optim.Adam([{'params': self.joint2, 'lr': self.GA_lr}])
-       self.GA_joint3_optimizer = torch.optim.Adam([{'params': self.joint3, 'lr': self.GA_lr}])
-       self.GA_joint4_optimizer = torch.optim.Adam([{'params': self.joint4, 'lr': self.GA_lr}])
-       self.GA_joint5_optimizer = torch.optim.Adam([{'params': self.joint5, 'lr': self.GA_lr}])
-       self.GA_joint6_optimizer = torch.optim.Adam([{'params': self.joint6, 'lr': self.GA_lr}])
-       self.GA_joint7_optimizer = torch.optim.Adam([{'params': self.joint7, 'lr': self.GA_lr}])
-       
-       if dr_order == "single":
-           self.GA_joint_dict = {0 : [self.RT_optimizer], # any one is ok
-                             1 : [self.GA_joint1_optimizer],
-                             2 : [self.GA_joint2_optimizer],
-                             3 : [self.GA_joint3_optimizer],
-                             4 : [self.GA_joint4_optimizer], 
-                             5 : [self.GA_joint5_optimizer],
-                             6 : [self.GA_joint6_optimizer],
-                             7 : [self.GA_joint7_optimizer],
-                             8 : [self.GA_joint7_optimizer] ,
-                             "whole" : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, 
-                                       self.GA_joint4_optimizer, self.GA_joint5_optimizer, self.GA_joint6_optimizer, self.GA_joint7_optimizer
-                                       ]
-                            }
-       elif dr_order == "sequence":
-           self.GA_joint_dict = {0 : [self.RT_optimizer], # any one is ok
-                                 1 : [self.RT_optimizer, self.GA_joint1_optimizer],
-                                 2 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer],
-                                 3 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer],
-                                 4 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, self.GA_joint4_optimizer], 
-                                 5 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, self.GA_joint4_optimizer, self.GA_joint5_optimizer],
-                                 6 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, self.GA_joint4_optimizer, self.GA_joint5_optimizer, self.GA_joint6_optimizer],
-                                 7 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, self.GA_joint4_optimizer, self.GA_joint5_optimizer, self.GA_joint6_optimizer, self.GA_joint7_optimizer],
-                                 8 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, self.GA_joint4_optimizer, self.GA_joint5_optimizer, self.GA_joint6_optimizer, self.GA_joint7_optimizer] ,
-                                 "whole" : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, 
-                                       self.GA_joint4_optimizer, self.GA_joint5_optimizer, self.GA_joint6_optimizer, self.GA_joint7_optimizer
-                                       ]
-                                }
-       else:
-           raise ValueError
+#       self.GA_joint1_optimizer = torch.optim.Adam([{'params': self.joint1, 'lr': self.GA_lr}])
+#       self.GA_joint2_optimizer = torch.optim.Adam([{'params': self.joint2, 'lr': self.GA_lr}])
+#       self.GA_joint3_optimizer = torch.optim.Adam([{'params': self.joint3, 'lr': self.GA_lr}])
+#       self.GA_joint4_optimizer = torch.optim.Adam([{'params': self.joint4, 'lr': self.GA_lr}])
+#       self.GA_joint5_optimizer = torch.optim.Adam([{'params': self.joint5, 'lr': self.GA_lr}])
+#       self.GA_joint6_optimizer = torch.optim.Adam([{'params': self.joint6, 'lr': self.GA_lr}])
+#       self.GA_joint7_optimizer = torch.optim.Adam([{'params': self.joint7, 'lr': self.GA_lr}])
+#       
+#       if dr_order == "single":
+#           self.GA_joint_dict = {0 : [self.RT_optimizer], # any one is ok
+#                             1 : [self.GA_joint1_optimizer],
+#                             2 : [self.GA_joint2_optimizer],
+#                             3 : [self.GA_joint3_optimizer],
+#                             4 : [self.GA_joint4_optimizer], 
+#                             5 : [self.GA_joint5_optimizer],
+#                             6 : [self.GA_joint6_optimizer],
+#                             7 : [self.GA_joint7_optimizer],
+#                             8 : [self.GA_joint7_optimizer] ,
+#                             "whole" : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, 
+#                                       self.GA_joint4_optimizer, self.GA_joint5_optimizer, self.GA_joint6_optimizer, self.GA_joint7_optimizer
+#                                       ]
+#                            }
+#       elif dr_order == "sequence":
+#           self.GA_joint_dict = {0 : [self.RT_optimizer], # any one is ok
+#                                 1 : [self.RT_optimizer, self.GA_joint1_optimizer],
+#                                 2 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer],
+#                                 3 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer],
+#                                 4 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, self.GA_joint4_optimizer], 
+#                                 5 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, self.GA_joint4_optimizer, self.GA_joint5_optimizer],
+#                                 6 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, self.GA_joint4_optimizer, self.GA_joint5_optimizer, self.GA_joint6_optimizer],
+#                                 7 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, self.GA_joint4_optimizer, self.GA_joint5_optimizer, self.GA_joint6_optimizer, self.GA_joint7_optimizer],
+#                                 8 : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, self.GA_joint4_optimizer, self.GA_joint5_optimizer, self.GA_joint6_optimizer, self.GA_joint7_optimizer] ,
+#                                 "whole" : [self.RT_optimizer, self.GA_joint1_optimizer, self.GA_joint2_optimizer, self.GA_joint3_optimizer, 
+#                                       self.GA_joint4_optimizer, self.GA_joint5_optimizer, self.GA_joint6_optimizer, self.GA_joint7_optimizer
+#                                       ]
+#                                }
+#       else:
+#           raise ValueError
        
    
 
@@ -335,74 +335,70 @@ if __name__ == "__main__":
    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
    DF = DiffPFDepthRenderer(cfg, device)
    DF.load_mesh()
-   K = torch.tensor([
-                   [502.30, 0.0, 319.75],
-                   [0.0, 502.30, 179.75],
-                   [0.0, 0.0, 1.0]
-                   ], device=device)
+   K = torch.tensor([[907.8525390625, 0, 952.618408203125], [0, 907.8391723632812, 548.60498046875], [0, 0, 1]], device=device)
    camera_K = K.detach().cpu().numpy()
-   height = 360
-   width = 640
+   height = 1080
+   width = 1920
    DF.set_camera_intrinsics(K, width=width, height=height)
    
-   pkl_path = f"/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0715_2d3d/"
-   pkl_path_list = glob.glob(os.path.join(pkl_path, "*pkl"))
-   pkl_path_list.sort()
+#   pkl_path = f"/DATA/disk1/hyperplane/Depth_C2RP/Data/Data_0715_2d3d/"
+#   pkl_path_list = glob.glob(os.path.join(pkl_path, "*pkl"))
+#   pkl_path_list.sort()
    
-   for b, pkl_path in enumerate(pkl_path_list):
-       with open(pkl_path , "rb") as fh:
-           json_data = pickle.load(fh)[0]
-       json_keypoints_data = json_data["keypoints"]                    
-       json_joints_data = json_data["joints_3n_fixed_42"]
-       json_joints_8_data = json_data["joints"] 
-       
-       this_joint_angles = [kp["position"] for idx, kp in enumerate(json_joints_8_data)]
-       this_joint_angles = torch.from_numpy(np.array(this_joint_angles)).float().to(device).reshape(1, 7, 1)
-       this_rot = torch.from_numpy(np.array(json_keypoints_data[0]["R2C_mat"])).float().to(device).reshape(1, 3, 3)
-       this_quaternion = matrix_to_quaternion(this_rot) # 1 x 4
-       this_translation = torch.from_numpy(np.array(json_keypoints_data[0]["location_wrt_cam"])).float().to(device).reshape(1, 3) # 1 x 3
-       kps_7_list = (np.array([kp["location_wrt_cam"] for idx, kp in enumerate(json_keypoints_data)])[[0,2,3,4,6,7,8]])
-       kps_14_list = np.array([json_joints_data[idx]["location_wrt_cam"] for idx in range(len(json_joints_data))])
-       
-       
-       kps_7_list = (camera_K @ kps_7_list.T).T # (N, 3)
-       kps_7_list = (kps_7_list / kps_7_list[:, -1:])[:, :2]
-       kps_14_list = (camera_K @ kps_14_list.T).T # (N, 3)
-       kps_14_list = (kps_14_list / kps_14_list[:, -1:])[:, :2]
-       
-       this_quaternion.requires_grad = True
-       this_translation.requires_grad = True
-#       this_joint_angles.requires_grad = True
-       
-       DF.set_all_optimizer(this_joint_angles, this_quaternion, this_translation)
-       DF.batch_mesh(1)
-   
-       DF.concat_mesh()
-       img = DF.Rasterize()[0].detach().cpu().numpy() * (-255)
-       
-       image_path = f"./data_imgs/render_depth_{str(b).zfill(4)}.png"
-       cv2.imwrite(image_path, img)
-       images = []
-       for n in range(len(kps_7_list)):
-           image = overlay_points_on_image(image_path, [kps_7_list[n]], annotation_color_dot = ["yellow"], point_diameter=4)
-           images.append(image)
-       
-       img = mosaic_images(
-                   images, rows=2, cols=4, inner_padding_px=10
-               )
-       save_path = image_path.replace("render", "7_kps_render.png")
-       img.save(save_path)
-       
-       images = []
-       for n in range(len(kps_14_list)):
-           image = overlay_points_on_image(image_path, [kps_14_list[n]], annotation_color_dot = ["blue"], point_diameter=4)
-           images.append(image)
-       
-       img = mosaic_images(
-                   images, rows=4, cols=4, inner_padding_px=10
-               )
-       save_path = image_path.replace("render", "14_kps_render.png")
-       img.save(save_path)       
+#   for b, pkl_path in enumerate(pkl_path_list):
+#       with open(pkl_path , "rb") as fh:
+#           json_data = pickle.load(fh)[0]
+#       json_keypoints_data = json_data["keypoints"]                    
+#       json_joints_data = json_data["joints_3n_fixed_42"]
+#       json_joints_8_data = json_data["joints"] 
+#       
+#       this_joint_angles = [kp["position"] for idx, kp in enumerate(json_joints_8_data)]
+#       this_joint_angles = torch.from_numpy(np.array(this_joint_angles)).float().to(device).reshape(1, 7, 1)
+#       this_rot = torch.from_numpy(np.array(json_keypoints_data[0]["R2C_mat"])).float().to(device).reshape(1, 3, 3)
+#       this_quaternion = matrix_to_quaternion(this_rot) # 1 x 4
+#       this_translation = torch.from_numpy(np.array(json_keypoints_data[0]["location_wrt_cam"])).float().to(device).reshape(1, 3) # 1 x 3
+#       kps_7_list = (np.array([kp["location_wrt_cam"] for idx, kp in enumerate(json_keypoints_data)])[[0,2,3,4,6,7,8]])
+#       kps_14_list = np.array([json_joints_data[idx]["location_wrt_cam"] for idx in range(len(json_joints_data))])
+#       
+#       
+#       kps_7_list = (camera_K @ kps_7_list.T).T # (N, 3)
+#       kps_7_list = (kps_7_list / kps_7_list[:, -1:])[:, :2]
+#       kps_14_list = (camera_K @ kps_14_list.T).T # (N, 3)
+#       kps_14_list = (kps_14_list / kps_14_list[:, -1:])[:, :2]
+#       
+#       this_quaternion.requires_grad = True
+#       this_translation.requires_grad = True
+##       this_joint_angles.requires_grad = True
+#       
+#       DF.set_all_optimizer(this_joint_angles, this_quaternion, this_translation)
+#       DF.batch_mesh(1)
+#   
+#       DF.concat_mesh()
+#       img = DF.Rasterize()[0].detach().cpu().numpy() * (-255)
+#       
+#       image_path = f"./data_imgs/render_depth_{str(b).zfill(4)}.png"
+#       cv2.imwrite(image_path, img)
+#       images = []
+#       for n in range(len(kps_7_list)):
+#           image = overlay_points_on_image(image_path, [kps_7_list[n]], annotation_color_dot = ["yellow"], point_diameter=4)
+#           images.append(image)
+#       
+#       img = mosaic_images(
+#                   images, rows=2, cols=4, inner_padding_px=10
+#               )
+#       save_path = image_path.replace("render", "7_kps_render.png")
+#       img.save(save_path)
+#       
+#       images = []
+#       for n in range(len(kps_14_list)):
+#           image = overlay_points_on_image(image_path, [kps_14_list[n]], annotation_color_dot = ["blue"], point_diameter=4)
+#           images.append(image)
+#       
+#       img = mosaic_images(
+#                   images, rows=4, cols=4, inner_padding_px=10
+#               )
+#       save_path = image_path.replace("render", "14_kps_render.png")
+#       img.save(save_path)       
    
    
    
@@ -464,33 +460,33 @@ if __name__ == "__main__":
 #       img.save(save_path)
        
    
-#   quaternion = torch.tensor([ 0.6257,  0.7686,  0.0969, -0.0913],device=device).reshape(1, 4)
-#   translation = torch.tensor([-0.37863880349038576, 0.2666280120354375, 1.5995485870204855], device=device).reshape(1, 3)
-#   joints_angle = torch.tensor([-0.6526082062025893, 
-#                                             0.9279837857801965, 
-#                                             2.551399836921973, 
-#                                             -2.33985123801545, \
-#                                             1.4105617980583107, 
-#                                             2.125588105143108, 
-#                                             1.2248684962301084, 
-#                                            ], device=device).reshape(1, 7, 1)
-#   joints_angle.requires_grad = True
-#   quaternion.requires_grad = True
-#   translation.requires_grad = True
+   quaternion = torch.tensor([ 0.1002, -0.1701, -0.0076,  0.9803],device=device).reshape(1, 4)
+   translation = torch.tensor([-0.051, -0.43, 1.13], device=device).reshape(1, 3)
+   joints_angle = torch.tensor([-0.6526082062025893, 
+                                             0.9279837857801965, 
+                                             2.551399836921973, 
+                                             -2.33985123801545, \
+                                             1.4105617980583107, 
+                                             2.125588105143108, 
+                                             1.2248684962301084, 
+                                            ], device=device).reshape(1, 7, 1)
+   joints_angle.requires_grad = True
+   quaternion.requires_grad = True
+   translation.requires_grad = True
    
 
 
-#   DF.set_optimizer(quaternion, translation, joints_angle)
-#   DF.batch_mesh(1)
-#   
-#   DF.concat_mesh()
-#   img = DF.Rasterize()
-#   print(img.shape)
-#   print(torch.max(img))
-#   print(torch.min(img))
-#   
-#   cv2.imwrite(f"./render_depth.png", img[0].detach().cpu().numpy() * (-255))
-#   
+   DF.set_all_optimizer(quaternion, translation, joints_angle)
+   DF.batch_mesh(1)
+   
+   DF.concat_mesh()
+   img = DF.Rasterize()
+   print(img.shape)
+   print(torch.max(img))
+   print(torch.min(img))
+   
+   cv2.imwrite(f"./render_depth.png", img[0].detach().cpu().numpy() * (-255))
+   
 #   pcs = img[0].detach().cpu().numpy().reshape(-1, 3)
 #   #pcs[:, 1] *= -1
 #   pcs[:, 2] *= -1
@@ -501,8 +497,8 @@ if __name__ == "__main__":
 #   K = K.detach().cpu().numpy()
 #   gt_pcs = depthmap2pointcloud(gt_img, K[0][0], K[1][1], K[0][2], K[1][2])
 #   np.savetxt(f"./gt_pcs.txt", gt_pcs)
-   
-   
+#   
+#   
 #   gt_rgb_image = cv2.imread(img_path[b])
 #            gt_rgb_image = cv2.cvtColor(gt_rgb_image, cv2.COLOR_RGB2BGR)
 #            gt_rgb_image = cv2.resize(gt_rgb_image, (depth_valid_render_mask.shape[2], self.render_depth_mask.shape[1]), interpolation=cv2.INTER_CUBIC)[12:-12, :, :]
@@ -511,8 +507,8 @@ if __name__ == "__main__":
 #   render_depth_image = PILImage.fromarray((img[0, : ,:, -1].detach().cpu().numpy() * (-255)).astype('uint8')).convert('RGB')
 #   blend_image = PILImage.blend(render_depth_image, gt_depth_image, 0.5)
 #   blend_image.save(f"./blend.png")
-    
-   
+#    
+#   
 #    depth_gt = np.loadtxt(f"./gt/depth_robot_gt.txt")
 #    depth_gt_tensor = torch.from_numpy(depth_gt.reshape(1, height,width, -1)).to(device) 
 #    depth_gt_mask = np.loadtxt(f"./gt/mask_robot_gt.txt")
